@@ -1,4 +1,3 @@
-# heap.py
 from __future__ import annotations
 from typing import (
     Any, Callable, Generic, Iterable, List, Optional, Protocol, TypeVar
