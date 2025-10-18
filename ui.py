@@ -16,7 +16,7 @@ class UI:
             elif event.key == pygame.K_p:
                 self.heap.pop()
             elif event.key == pygame.K_m:
-                self.heap.min_heap = not self.heap.min_heap
+                self.heap.toggle_mode()
             elif event.key == pygame.K_r:
                 self.heap.clear()
 
@@ -39,3 +39,10 @@ class UI:
         mode = "Min-Heap" if self.heap.min_heap else "Max-Heap"
         info = self.font.render(f"[I] Insert  [P] Pop  [M] Toggle ({mode})  [R] Reset", True, TEXT_COLOR)
         self.screen.blit(info, (20, 20))
+
+        # Индикатор корректности кучи
+        ok = self.heap.is_valid_heap()
+        status_text = "HEAP OK" if ok else "HEAP BROKEN"
+        status_color = (120, 255, 120) if ok else (255, 120, 120)
+        status = self.font.render(status_text, True, status_color)
+        self.screen.blit(status, (20, 50))
