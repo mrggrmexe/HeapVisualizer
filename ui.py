@@ -2,6 +2,7 @@ import pygame
 import random
 from settings import *
 
+
 class UI:
     def __init__(self, screen, heap):
         self.screen = screen
@@ -16,16 +17,17 @@ class UI:
         # Поле ввода
         self.input_rect = pygame.Rect(20, 44, 160, 28)
         self.input_active = False
-        self.input_text = ""  # вводимое число
+        self.input_text = ""
 
         # Ховеры
         self._hover_btn = None
 
+        # Прямоугольник кнопки Insert (сохраняем для кликов)
+        self.insert_btn_rect = None
+
     # ---------- построение кнопок ----------
     def _build_buttons(self):
-        """
-        Формирует линейку кнопок на верхней панели. Кнопка Toggle динамически меняет текст Min/Max.
-        """
+        """Формирует линейку кнопок на верхней панели."""
         labels = [
             ("Insert Rand", "insert_rand"),
             (self._toggle_label(), "toggle_mode"),
@@ -54,20 +56,26 @@ class UI:
                     break
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Клик по кнопке Insert
+            if self.insert_btn_rect and self.insert_btn_rect.collidepoint(event.pos):
+                if self.input_text:
+                    self._insert_from_input()
+                return
+
             # Фокус ввода
             if self.input_rect.collidepoint(event.pos):
                 self.input_active = True
             else:
                 self.input_active = False
 
-            # Клик по кнопкам
+            # Кнопки панели
             for btn in self.buttons:
                 if btn["rect"].collidepoint(event.pos) and self._is_enabled(btn):
                     self._run_action(btn["action"])
                     break
 
         elif event.type == pygame.KEYDOWN:
-            # Горячие клавиши остаются
+            # Горячие клавиши
             if event.key == pygame.K_i:
                 self._run_action("insert_rand")
             elif event.key == pygame.K_p:
@@ -94,11 +102,10 @@ class UI:
             value = random.randint(1, 99)
             self.heap.push(value)
         elif action == "toggle_mode":
-            # корректно перестраиваем
             if hasattr(self.heap, "toggle_mode"):
                 self.heap.toggle_mode()
             else:
-                # обратная совместимость (если старый heap.py)
+                # fallback
                 self.heap.min_heap = not self.heap.min_heap
                 if hasattr(self.heap, "heapify"):
                     self.heap.heapify()
@@ -108,16 +115,16 @@ class UI:
         elif action == "reset":
             self.heap.clear()
 
-        # обновить подписи (кнопка Toggle)
         self._build_buttons()
 
     def _insert_from_input(self):
         if self.input_text:
             try:
                 val = int(self.input_text)
-                # Небольшая нормализация диапазона
-                if val < -10_000: val = -10_000
-                if val > 10_000: val = 10_000
+                if val < -10_000:
+                    val = -10_000
+                if val > 10_000:
+                    val = 10_000
                 self.heap.push(val)
             except ValueError:
                 pass
@@ -154,7 +161,7 @@ class UI:
             label_surf = self.font.render(btn["label"], True, TEXT_COLOR)
             self.screen.blit(label_surf, (rect.x + 12, rect.y + 4))
 
-        # поле ввода + кнопка Insert
+        # поле ввода
         pygame.draw.rect(
             self.screen,
             (160, 160, 160) if self.input_active else INPUT_BG,
@@ -166,56 +173,51 @@ class UI:
         txt = self.small.render(placeholder, True, ph_color)
         self.screen.blit(txt, (self.input_rect.x + 8, self.input_rect.y + 6))
 
-        # кнопка "Insert"
-        insert_rect = pygame.Rect(self.input_rect.right + 8, self.input_rect.y, 90, 28)
-        pygame.draw.rect(self.screen, BTN_BG if self.input_text else BTN_BG_DISABLED, insert_rect, border_radius=6)
+        # кнопка Insert
+        self.insert_btn_rect = pygame.Rect(self.input_rect.right + 8, self.input_rect.y, 90, 28)
+        btn_bg = BTN_BG if self.input_text else BTN_BG_DISABLED
+        pygame.draw.rect(self.screen, btn_bg, self.insert_btn_rect, border_radius=6)
         label = self.font.render("Insert", True, TEXT_COLOR)
-        self.screen.blit(label, (insert_rect.x + 16, insert_rect.y + 4))
-
-        # Клик по Insert
-        # (в обработчике мыши нам нужно знать этот rect: сделаем простую проверку прямо здесь через состояние мыши)
-        if pygame.mouse.get_pressed(num_buttons=3)[0]:
-            # если нажата ЛКМ и наведено на кнопку — выполним
-            if insert_rect.collidepoint(pygame.mouse.get_pos()) and self.input_text:
-                self._insert_from_input()
+        self.screen.blit(label, (self.insert_btn_rect.x + 16, self.insert_btn_rect.y + 4))
 
     def _draw_array_view(self):
         if not self.heap or not getattr(self.heap, "data", None):
-            # подсказка в центре, если пусто
             msg = self.font.render("Heap is empty. Use Insert or type a number ↑", True, (180, 180, 200))
             self.screen.blit(msg, (WIDTH // 2 - msg.get_width() // 2, HEIGHT // 2 - msg.get_height() // 2))
             return
 
-        # Динамически вычисляем ширину/масштаб и стартовую точку ниже панели
         top = PANEL_H + 10
         available_h = HEIGHT - top - 50
         values = self.heap.data
         vmax = max(abs(v) for v in values) or 1
         scale = max(1, available_h // (vmax * 3))
-
         bar_width = max(16, WIDTH // max(10, len(values)))
+
+        # ограничиваем область рисования графика
+        prev_clip = self.screen.get_clip()
+        clip_rect = pygame.Rect(0, top, WIDTH, available_h)
+        self.screen.set_clip(clip_rect)
+
+        base_y = top + available_h // 2
         for i, val in enumerate(values):
             x = i * bar_width + 10
-            # нулевая линия
-            base_y = top + available_h // 2
             height = abs(val) * scale * 3
             y = base_y - height if val >= 0 else base_y
-            rect = pygame.Rect(x, y, bar_width - 4, height)
-            color = BAR_COLOR
-            pygame.draw.rect(self.screen, color, rect)
+            pygame.draw.rect(self.screen, BAR_COLOR, pygame.Rect(x, y, bar_width - 4, height))
             label = self.small.render(str(val), True, TEXT_COLOR)
             self.screen.blit(label, (x + (bar_width - label.get_width()) // 2, base_y + 6))
 
-        # линия нуля
-        pygame.draw.line(self.screen, (90, 90, 110), (10, top + available_h // 2), (WIDTH - 10, top + available_h // 2), 1)
+        # нулевая линия
+        pygame.draw.line(self.screen, (90, 90, 110), (10, base_y), (WIDTH - 10, base_y), 1)
+
+        # вернуть клип
+        self.screen.set_clip(prev_clip)
 
     def _draw_info_text(self):
-        # режим
         mode = "Min-Heap" if self.heap.min_heap else "Max-Heap"
         info = self.font.render(f"[I] InsertRand  [P] Pop  [M] Toggle  [R] Reset   ({mode})", True, TEXT_COLOR)
         self.screen.blit(info, (20, HEIGHT - 36))
 
-        # статус кучи
         ok = True
         if hasattr(self.heap, "is_valid_heap"):
             try:
