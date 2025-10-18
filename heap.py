@@ -100,3 +100,35 @@ class Heap:
             # обмен и продолжить просеивание вниз с новой позицией
             self.data[index], self.data[candidate] = self.data[candidate], self.data[index]
             index = candidate
+
+    def heapify(self) -> None:
+        """Перестраивает текущий self.data в корректную кучу для текущего режима."""
+        n = len(self.data)
+        # стартуем с последнего родителя и идём к корню
+        for i in range((n - 2) // 2, -1, -1):
+            self._heapify_down(i)
+
+    def toggle_mode(self) -> None:
+        """Переключает режим min/max и перестраивает кучу."""
+        self.min_heap = not self.min_heap
+        self.heapify()
+
+    def set_mode(self, min_heap: bool) -> None:
+        """Устанавливает режим и перестраивает кучу при необходимости."""
+        if self.min_heap != min_heap:
+            self.min_heap = min_heap
+            self.heapify()
+
+    def is_valid_heap(self) -> bool:
+        """Проверяет, соблюдён ли инвариант кучи для текущего режима."""
+        n = len(self.data)
+        # достаточно проверить всех родителей
+        last_parent = (n - 2) // 2
+        for i in range(0, last_parent + 1):
+            left = 2 * i + 1
+            right = 2 * i + 2
+            if left < n and self._compare(self.data[left], self.data[i]):
+                return False
+            if right < n and self._compare(self.data[right], self.data[i]):
+                return False
+        return True
