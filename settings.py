@@ -16,8 +16,23 @@ INPUT_BG = (35, 35, 50)
 ACCENT_OK = (120, 255, 120)
 ACCENT_BAD = (255, 120, 120)
 
+# Цвета анимаций
+COMPARE_COLOR = (255, 200, 80)
+SWAP_COLOR = (255, 120, 120)
+MOVE_COLOR = (100, 255, 180)
+APPEAR_COLOR = (140, 220, 255)
+
 # Геометрия панелей
 PANEL_H = 80   # высота верхней панели
+
+# Анимации
+ANIM_COMPARE_MS = 140
+ANIM_SWAP_MS = 240
+ANIM_MOVE_MS = 240
+ANIM_APPEAR_MS = 180
+
+# Прозрачность «призрачных» баров (0..255)
+GHOST_ALPHA = 220
 
 # Частота кадров
 FPS = 60
