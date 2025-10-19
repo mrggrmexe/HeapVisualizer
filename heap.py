@@ -59,18 +59,29 @@ class Heap(Generic[T]):
 
     def pop(self, default: Optional[T] = None) -> Optional[T]:
         with self._mutation("pop"):
+            # Пустая куча
             if not self.data:
                 self._notify("pop_empty", size=0)
                 return default
-            root = self.data[0]
-            last = self.data.pop()
-            self._notify("pop_root", value=root, size=len(self.data) + 1)
-            if self.data:
-                self.data[0] = last
-                self._notify("move", src=len(self.data), dst=0, value=last)
-                self._heapify_down(0)
-            self._notify("pop_done", value=root, size=len(self.data))
-            return root
+            self._notify("pop_start", size=len(self.data))
+            try:
+                # Сохраняем корень
+                root = self.data[0]
+                self._notify("pop_root", value=root, size=len(self.data))
+                # Берём последний элемент
+                last = self.data.pop()
+                # Если есть элементы — восстанавливаем инвариант
+                if self.data:
+                    self.data[0] = last
+                    self._notify("move", src=len(self.data), dst=0, value=last)
+                    self._heapify_down(0)
+                # Уведомляем об успешном удалении
+                self._notify("pop_done", value=root, size=len(self.data))
+                return root
+            except Exception as e:
+                # Если случилась ошибка — логируем и не нарушаем состояние
+                self._notify("pop_error", error=str(e), size=len(self.data))
+                raise
 
     def peek(self) -> Optional[T]:
         return self.data[0] if self.data else None
