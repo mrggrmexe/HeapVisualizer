@@ -25,16 +25,13 @@ class UI:
         self.insert_btn_rect = None
 
         # ----- АНИМАЦИИ -----
-        # Очередь событий от кучи и текущая анимация
         self.anim_queue = []
-        self.current_anim = None  # dict: {type, t0, dur, payload}
-        self.highlight_pair = None  # для compare: (i, j) и таймаут
+        self.current_anim = None
+        self.highlight_pair = None
         self.highlight_end = 0
 
-        # Полупрозрачная поверхность для «призраков»
         self.overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
 
-        # Подписываемся на observer кучи (если есть такой метод)
         if hasattr(self.heap, "set_observer"):
             self.heap.set_observer(self._on_heap_event)
 
@@ -68,26 +65,22 @@ class UI:
                     break
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            # Клик по Insert
             if self.insert_btn_rect and self.insert_btn_rect.collidepoint(event.pos):
                 if self.input_text:
                     self._insert_from_input()
                 return
 
-            # Фокус ввода
             if self.input_rect.collidepoint(event.pos):
                 self.input_active = True
             else:
                 self.input_active = False
 
-            # Кнопки
             for btn in self.buttons:
                 if btn["rect"].collidepoint(event.pos) and self._is_enabled(btn):
                     self._run_action(btn["action"])
                     break
 
         elif event.type == pygame.KEYDOWN:
-            # Горячие клавиши
             if event.key == pygame.K_i:
                 self._run_action("insert_rand")
             elif event.key == pygame.K_p:
@@ -97,7 +90,6 @@ class UI:
             elif event.key == pygame.K_r:
                 self._run_action("reset")
 
-            # Ввод
             if self.input_active:
                 if event.key == pygame.K_RETURN:
                     self._insert_from_input()
@@ -144,12 +136,8 @@ class UI:
             return False
         return True
 
-    # ---------- OBSERVER от кучи ----------
+    # ---------- OBSERVER ----------
     def _on_heap_event(self, event: str, payload: dict):
-        """
-        Сюда приходят события: compare, swap, insert, move, pop_root, pop_done, heapify_done, ...
-        Мы складываем их в очередь для поочерёдного проигрывания.
-        """
         if event == "compare":
             i = payload.get("i")
             j = payload.get("j")
@@ -187,7 +175,6 @@ class UI:
                 "dur": ANIM_APPEAR_MS / 1000.0,
                 "payload": {"index": idx, "value": val}
             })
-        # прочие события нам не нужно анимировать отдельно
 
     # ---------- отрисовка ----------
     def draw(self):
@@ -198,7 +185,6 @@ class UI:
     def _draw_toolbar(self):
         pygame.draw.rect(self.screen, PANEL_BG, (0, 0, WIDTH, PANEL_H))
 
-        # кнопки
         for btn in self.buttons:
             rect = btn["rect"]
             enabled = self._is_enabled(btn)
@@ -212,7 +198,6 @@ class UI:
             label_surf = self.font.render(btn["label"], True, TEXT_COLOR)
             self.screen.blit(label_surf, (rect.x + 12, rect.y + 4))
 
-        # поле ввода
         pygame.draw.rect(
             self.screen,
             (160, 160, 160) if self.input_active else INPUT_BG,
@@ -224,14 +209,20 @@ class UI:
         txt = self.small.render(placeholder, True, ph_color)
         self.screen.blit(txt, (self.input_rect.x + 8, self.input_rect.y + 6))
 
-        # кнопка Insert
         self.insert_btn_rect = pygame.Rect(self.input_rect.right + 8, self.input_rect.y, 90, 28)
         btn_bg = BTN_BG if self.input_text else BTN_BG_DISABLED
         pygame.draw.rect(self.screen, btn_bg, self.insert_btn_rect, border_radius=6)
         label = self.font.render("Insert", True, TEXT_COLOR)
         self.screen.blit(label, (self.insert_btn_rect.x + 16, self.insert_btn_rect.y + 4))
 
-    # --- геометрия и отрисовка графика с анимациями ---
+    # ---------- Прозрачность баров ----------
+    def _alpha_for_value(self, val, vmin, vmax) -> int:
+        if vmax == vmin:
+            return 255
+        t = (val - vmin) / (vmax - vmin)
+        return 128 + int(t * (255 - 128))  # 50%..100%
+
+    # ---------- отрисовка баров и анимаций ----------
     def _update_and_draw_array_view(self):
         values = getattr(self.heap, "data", [])
         if not values:
@@ -244,15 +235,11 @@ class UI:
         vmax = max(abs(v) for v in values) or 1
         scale = max(1, available_h // (vmax * 3))
         bar_width = max(16, WIDTH // max(10, len(values)))
-        base_y = top + available_h // 2
+        base_y = top + int(available_h * 0.9)
 
-        # подготовим overlay
         self.overlay.fill((0, 0, 0, 0))
-
-        # Обновляем текущую анимацию/подсветку
         self._advance_animation()
 
-        # Если идёт swap/move/appear — исключим эти индексы из базовой отрисовки
         exclude = set()
         if self.current_anim:
             t = self.current_anim
@@ -263,10 +250,13 @@ class UI:
             elif t["type"] == "appear":
                 exclude.update([t["payload"]["index"]])
 
-        # Рисуем базовые бары
         prev_clip = self.screen.get_clip()
         clip_rect = pygame.Rect(0, top, WIDTH, available_h)
         self.screen.set_clip(clip_rect)
+
+        bars_layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        vmin = min(values)
+        vmax_val = max(values)
 
         for i, val in enumerate(values):
             if i in exclude:
@@ -274,26 +264,28 @@ class UI:
             x = i * bar_width + 10
             height = abs(val) * scale * 3
             y = base_y - height if val >= 0 else base_y
+            alpha = self._alpha_for_value(val, vmin, vmax_val)
+            base_color = COMPARE_COLOR if (self.highlight_pair and i in self.highlight_pair) else BAR_COLOR
+            color_with_alpha = (*base_color, alpha)
+            pygame.draw.rect(bars_layer, color_with_alpha, pygame.Rect(x, y, bar_width - 4, height))
 
-            # Подсветка compare
-            color = BAR_COLOR
-            if self.highlight_pair and i in self.highlight_pair:
-                color = COMPARE_COLOR
+        self.screen.blit(bars_layer, (0, 0))
 
-            pygame.draw.rect(self.screen, color, pygame.Rect(x, y, bar_width - 4, height))
+        for i, val in enumerate(values):
+            if i in exclude:
+                continue
+            x = i * bar_width + 10
             label = self.small.render(str(val), True, TEXT_COLOR)
             self.screen.blit(label, (x + (bar_width - label.get_width()) // 2, base_y + 6))
 
-        # Нулевая линия
         pygame.draw.line(self.screen, (90, 90, 110), (10, base_y), (WIDTH - 10, base_y), 1)
 
-        # Отрисуем поверх «призрачные» бары активной анимации
         if self.current_anim:
             self._draw_active_overlay(values, bar_width, scale, base_y)
 
-        # вернуть клип
         self.screen.set_clip(prev_clip)
 
+    # ---------- Анимации ----------
     def _draw_active_overlay(self, values, bar_width, scale, base_y):
         t = self.current_anim
         kind = t["type"]
@@ -306,7 +298,6 @@ class UI:
             rect = pygame.Rect(int(x), int(y), bar_width - 4, height)
             c = (*color, alpha)
             pygame.draw.rect(self.overlay, c, rect)
-            # подпись
             label = self.small.render(str(val), True, TEXT_COLOR)
             self.overlay.blit(label, (rect.x + (bar_width - label.get_width()) // 2, base_y + 6))
 
@@ -315,7 +306,6 @@ class UI:
             ai, aj = p["ai"], p["aj"]
             xi = i * bar_width + 10
             xj = j * bar_width + 10
-            # линейная интерполяция
             xi2 = xi + (xj - xi) * progress
             xj2 = xj + (xi - xj) * progress
             draw_bar(xi2, ai, SWAP_COLOR)
@@ -331,38 +321,30 @@ class UI:
         elif kind == "appear":
             idx, val = p["index"], p["value"]
             x = idx * bar_width + 10
-            # появление сверху: интерполяция по Y — реализуем через альфу
             alpha = int(GHOST_ALPHA * progress)
             draw_bar(x, val, APPEAR_COLOR, alpha=alpha)
 
-        # выводим overlay
         self.screen.blit(self.overlay, (0, 0))
 
-    # ---------- тайминг и смена кадров анимаций ----------
+    # ---------- Тайминг ----------
     def _advance_animation(self):
         now = time.perf_counter()
-        # Завершить compare-подсветку по таймеру
         if self.highlight_pair and now >= self.highlight_end:
             self.highlight_pair = None
 
-        # Если нет текущей анимации — возьмём следующую из очереди
         if not self.current_anim and self.anim_queue:
             item = self.anim_queue.pop(0)
             item["t0"] = now
             self.current_anim = item
-            # Если compare — просто подсветка и немедленный переход после таймаута
             if item["type"] == "compare":
                 i, j = item["payload"]["i"], item["payload"]["j"]
                 self.highlight_pair = {i, j}
                 self.highlight_end = now + item["dur"]
-                # compare не держит current_anim — он только подсветка
                 self.current_anim = None
             return
 
-        # Если есть активная анимация — проверим, не закончилась ли
         if self.current_anim:
             if self._anim_progress(self.current_anim) >= 1.0:
-                # завершили
                 self.current_anim = None
 
     @staticmethod
@@ -375,6 +357,7 @@ class UI:
         now = time.perf_counter()
         return max(0.0, min(1.0, (now - anim["t0"]) / span))
 
+    # ---------- Инфо-текст ----------
     def _draw_info_text(self):
         mode = "Min-Heap" if self.heap.min_heap else "Max-Heap"
         info = self.font.render(f"[I] InsertRand  [P] Pop  [M] Toggle  [R] Reset   ({mode})", True, TEXT_COLOR)
