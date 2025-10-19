@@ -35,10 +35,26 @@ class Heap(Generic[T]):
     # ---------- PUBLIC API ----------
 
     def push(self, value: T) -> None:
+        # предварительная нормализация значения (NaN и key)
+        try:
+            _ = self._normalize_key(self.key(value) if self.key else value)
+        except Exception as e:
+            raise ValueError(f"Invalid value for heap: {value!r} ({e})") from e
         with self._mutation("push"):
+            n_before = len(self.data)
+            self._notify("insert_start", value=value, index=n_before)
+            # фактическая вставка
             self.data.append(value)
-            self._notify("insert", index=len(self.data) - 1, value=value)
-            self._heapify_up(len(self.data) - 1)
+            self._notify("insert", index=n_before, value=value)
+            try:
+                # восстанавливаем инвариант
+                self._heapify_up(n_before)
+            except Exception as e:
+                # если вдруг сравнение или heapify сломались — удаляем элемент обратно
+                popped = self.data.pop()
+                self._notify("insert_error", value=popped, error=str(e))
+                raise
+
             self._notify("push_done", size=len(self.data))
 
     def pop(self, default: Optional[T] = None) -> Optional[T]:
