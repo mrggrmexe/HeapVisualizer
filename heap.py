@@ -87,9 +87,12 @@ class Heap(Generic[T]):
         return self.data[0] if self.data else None
 
     def clear(self) -> None:
+        if not self.data:
+            return
         with self._mutation("clear"):
+            old_size = len(self.data)
             self.data.clear()
-            self._notify("clear")
+            self._notify("clear", cleared=old_size)
 
     def extend(self, items: Iterable[T]) -> None:
         """Пакетное добавление элементов с последующей перестройкой кучи."""
