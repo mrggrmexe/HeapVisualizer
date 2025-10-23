@@ -95,11 +95,19 @@ class Heap(Generic[T]):
             self._notify("clear", cleared=old_size)
 
     def extend(self, items: Iterable[T]) -> None:
-        """Пакетное добавление элементов с последующей перестройкой кучи."""
+        items = list(items)
+        if not items:
+            return
+        n_added = len(items)
+        if n_added == 1:
+            # Для одного элемента быстрее сделать push
+            self.heappush(items[0])
+            self._notify("extend", added=1)
+            return
         start_size = len(self.data)
         self.data.extend(items)
+        self.heapify()
         self._notify("extend", added=len(self.data) - start_size)
-        self.heapify()  # heapify уже сам управляет _mutation
 
     def toggle_mode(self) -> None:
         """Переключение min/max режима с перестройкой без двойной блокировки."""
