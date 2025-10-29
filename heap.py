@@ -1,4 +1,4 @@
-from typing import List, Optional, Any, Callable, Iterable, TypeVar, Generic
+from typing import List, Optional, Any, Callable, Iterable, TypeVar, Generic, Dict
 from contextlib import contextmanager
 import math
 
@@ -192,20 +192,25 @@ class Heap(Generic[T]):
 
     # ---------- NOTIFICATIONS ----------
 
-    def set_observer(self, fn: Optional[Callable[[str, dict], None]]) -> None:
+    def set_observer(self, fn: Optional[Callable[[str, Dict[str, Any]], None]]) -> None:
         self._observer = fn
 
     def _notify(self, event: str, **payload: Any) -> None:
-        if not self._observer:
+        observer = getattr(self, "_observer", None)
+        if not observer:
             return
-        compact = {}
-        for k, v in payload.items():
+
+        def _compact(v: Any) -> Any:
             s = repr(v)
-            compact[k] = (s[:200] + "…") if len(s) > 200 else v
+            return s[:200] + "…" if len(s) > 200 else v
+
+        compact_payload = {k: _compact(v) for k, v in payload.items()}
+
         try:
-            self._observer(event, compact)
-        except Exception:
-            pass
+            observer(event, compact_payload)
+        except Exception as e:
+            import logging
+            logging.debug(f"Observer callback failed for event '{event}': {e}", exc_info=True)
 
     # ---------- COMPARISON HELPERS ----------
 
