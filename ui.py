@@ -58,6 +58,32 @@ class UI:
     # ---------- обработка событий ----------
     def handle_event(self, event):
         if event.type == pygame.MOUSEMOTION:
+            self._hover_btn = next(
+                (btn for btn in self.buttons if btn["rect"].collidepoint(event.pos) and self._is_enabled(btn)), None
+            )
+
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Клик по кнопкам
+            for btn in self.buttons:
+                if btn["rect"].collidepoint(event.pos) and self._is_enabled(btn):
+                    self._run_action(btn["action"])
+                    return
+
+            # Клик по полю ввода
+            self.input_active = self.input_rect.collidepoint(event.pos)
+            if self.input_active:
+                self._hover_btn = None
+
+            # Клик по кнопке Insert
+            if self.insert_btn_rect and self.insert_btn_rect.collidepoint(event.pos):
+                self._insert_from_input()
+
+        elif event.type == pygame.KEYDOWN:
+            if self.input_active:
+                self._handle_text_input(event)
+            else:
+                self._handle_shortcuts(event)
+        if event.type == pygame.MOUSEMOTION:
             self._hover_btn = None
             for btn in self.buttons:
                 if btn["rect"].collidepoint(event.pos) and self._is_enabled(btn):
@@ -373,3 +399,26 @@ class UI:
         status_color = ACCENT_OK if ok else ACCENT_BAD
         status = self.font.render(status_text, True, status_color)
         self.screen.blit(status, (20, HEIGHT - 62))
+
+    def _handle_shortcuts(self, event):
+        keymap = {
+            pygame.K_i: "insert_rand",
+            pygame.K_p: "pop",
+            pygame.K_m: "toggle_mode",
+            pygame.K_r: "reset",
+        }
+        action = keymap.get(event.key)
+        if action:
+            self._run_action(action)
+
+    def _handle_text_input(self, event):
+        if event.key == pygame.K_RETURN:
+            self._insert_from_input()
+        elif event.key == pygame.K_BACKSPACE:
+            self.input_text = self.input_text[:-1]
+        elif event.key == pygame.K_ESCAPE:
+            self.input_active = False
+        else:
+            ch = event.unicode
+            if (ch.isdigit() or (ch == "-" and not self.input_text)) and len(self.input_text) < 6:
+                self.input_text += ch
