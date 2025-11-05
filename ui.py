@@ -1,8 +1,19 @@
+from dataclasses import dataclass
+
 import pygame
 import random
 import time
 from settings import *
 
+@dataclass
+class Button:
+    rect: pygame.Rect
+    label: str
+    action: str
+
+    def __getitem__(self, key):
+        # позволяет обращаться как к словарю: btn["rect"]
+        return getattr(self, key)
 
 class UI:
     def __init__(self, screen, heap):
@@ -74,14 +85,25 @@ class UI:
             ("Reset", "reset"),
         ]
 
-        x = 20
-        y = 12
+        # Константы для отступов и размеров
+        START_X = 20
+        START_Y = 12
+        PADDING_X = 12
+        PADDING_Y = 6
+        SPACING = 10
+
         self.buttons.clear()
+
+        x = START_X
         for label, action in labels:
-            w, _ = self.font.size(label)
-            rect = pygame.Rect(x, y, w + 24, 28)
-            self.buttons.append({"rect": rect, "label": label, "action": action})
-            x += rect.width + 10
+            text_w, text_h = self.font.size(label)
+            width = text_w + PADDING_X * 2
+            height = text_h + PADDING_Y * 2
+
+            rect = pygame.Rect(x, START_Y, width, height)
+            self.buttons.append(Button(rect, label, action))
+
+            x += width + SPACING
 
         self.toolbar_needs_redraw = True
 
