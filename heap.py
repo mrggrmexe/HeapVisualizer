@@ -517,3 +517,225 @@ class Heap(Generic[T]):
             if right < n and self._prefer(self.data[right], self.data[i]):
                 return False
         return True
+
+    # ---------- ENHANCED FUNCTIONALITY ----------
+
+    def nlargest(self, n: int) -> List[T]:
+        """
+        Возвращает n наибольших элементов кучи (для min-heap) или
+        n наименьших (для max-heap) без изменения структуры.
+
+        Args:
+            n: Количество элементов для возврата.
+
+        Returns:
+            Список из n элементов в соответствующем порядке.
+        """
+        if n <= 0:
+            return []
+
+        # Создаем временную копию для извлечения элементов
+        temp_heap = Heap(min_heap=self.min_heap, key=self.key)
+        temp_heap.data = self.data.copy()
+
+        result = []
+        for _ in range(min(n, len(temp_heap))):
+            result.append(temp_heap.pop())
+
+        return result
+
+    def pushpop(self, value: T) -> T:
+        """
+        Эквивалент последовательности push -> pop, но более эффективный.
+
+        Args:
+            value: Значение для добавления.
+
+        Returns:
+            Корневой элемент после вставки (может быть value или старый корень).
+        """
+        with self._mutation("pushpop"):
+            if not self.data or self._prefer(value, self.data[0]):
+                # Если куча пуста или новый элемент хуже корня
+                return value
+
+            # Сохраняем текущий корень
+            root = self.data[0]
+
+            # Заменяем корень новым значением и восстанавливаем инвариант
+            self.data[0] = value
+            self._notify("replace_root", old_value=root, new_value=value)
+            self._heapify_down(0)
+
+            return root
+
+    def replace(self, value: T) -> T:
+        """
+        Эквивалент pop -> push, но более эффективный.
+
+        Args:
+            value: Значение для добавления.
+
+        Returns:
+            Извлечённый корневой элемент.
+        """
+        if not self.data:
+            self.push(value)
+            return None
+
+        with self._mutation("replace"):
+            root = self.data[0]
+            self.data[0] = value
+            self._notify("replace_root", old_value=root, new_value=value)
+            self._heapify_down(0)
+
+            return root
+
+    def merge(self, other: 'Heap[T]') -> None:
+        """
+        Эффективно объединяет две кучи с одинаковыми параметрами.
+
+        Args:
+            other: Другая куча для объединения.
+
+        Raises:
+            ValueError: Если кучи имеют разные параметры сравнения.
+        """
+        if (self.min_heap != other.min_heap or
+                self.key != other.key or
+                self._nan_policy != other._nan_policy):
+            raise ValueError("Cannot merge heaps with different comparison parameters")
+
+        if not other.data:
+            return
+
+        with self._mutation("merge"):
+            old_size = len(self.data)
+            self.data.extend(other.data)
+            self.heapify()
+            self._notify("merge", added=len(other.data), old_size=old_size)
+
+    def items(self) -> List[T]:
+        """
+        Возвращает все элементы кучи в виде списка.
+        Альтернатива to_list() с более интуитивным именем.
+        """
+        return self.to_list()
+
+    def __iter__(self):
+        """
+        Поддержка итерации по элементам кучи (без гарантии порядка!).
+        Для получения элементов в отсортированном порядке используйте destructive_iter().
+        """
+        return iter(self.data)
+
+    def destructive_iter(self):
+        """
+        Итератор, который возвращает элементы в отсортированном порядке,
+        извлекая их из кучи (разрушающая операция).
+        """
+        while self.data:
+            yield self.pop()
+
+    def __contains__(self, value: T) -> bool:
+        """
+        Поддержка оператора 'in' для проверки наличия элемента.
+
+        Внимание: Линейный поиск! Для частых проверок рассмотрите
+        использование дополнительной структуры данных.
+        """
+        return value in self.data
+
+    def count(self, value: T) -> int:
+        """
+        Подсчитывает количество вхождений значения в кучу.
+
+        Внимание: Линейный поиск по всем элементам!
+        """
+        return self.data.count(value)
+
+    # ---------- STATISTICS AND METRICS ----------
+
+    def depth(self) -> int:
+        """
+        Возвращает глубину (высоту) бинарной кучи.
+
+        Returns:
+            Количество уровней в дереве.
+        """
+        if not self.data:
+            return 0
+        return int(math.log2(len(self.data))) + 1
+
+    def is_perfect(self) -> bool:
+        """
+        Проверяет, является ли куча идеально сбалансированным деревом.
+
+        Returns:
+            True если количество элементов равно 2^h - 1 для некоторого h.
+        """
+        n = len(self.data)
+        return (n & (n + 1)) == 0
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Возвращает статистику кучи для отладки и мониторинга.
+        """
+        return {
+            "size": len(self.data),
+            "mode": "min" if self.min_heap else "max",
+            "depth": self.depth(),
+            "is_perfect": self.is_perfect(),
+            "is_valid": self.is_valid_heap(),
+            "operations_count": self._ops,
+            "has_observer": self._observer is not None,
+            "verify_rate": self._verify_sr,
+            "nan_policy": self._nan_policy
+        }
+
+    # ---------- VISUALIZATION HELPER ----------
+
+    def to_tree_repr(self, max_depth: int = 4) -> List[str]:
+        """
+        Генерирует текстовое представление дерева для визуализации.
+
+        Args:
+            max_depth: Максимальная глубина для отображения.
+
+        Returns:
+            Список строк, представляющих уровни дерева.
+        """
+        if not self.data:
+            return ["[Empty heap]"]
+
+        result = []
+        n = len(self.data)
+        depth = min(self.depth(), max_depth)
+
+        for level in range(depth):
+            start = 2 ** level - 1
+            end = min(2 ** (level + 1) - 1, n)
+            level_items = []
+
+            for i in range(start, end):
+                if i < n:
+                    item_str = str(self.data[i])
+                    if len(item_str) > 10:
+                        item_str = item_str[:10] + "..."
+                    level_items.append(item_str)
+
+            indent = " " * (2 ** (depth - level) - 2)
+            separator = " " * (2 ** (depth - level + 1) - 2)
+            result.append(f"{indent}{separator.join(level_items)}")
+
+        if len(self.data) > 2 ** max_depth - 1:
+            result.append(f"... and {len(self.data) - (2 ** max_depth - 1)} more items")
+
+        return result
+
+    def print_tree(self, max_depth: int = 4) -> None:
+        """
+        Печатает дерево в удобочитаемом формате.
+        """
+        for line in self.to_tree_repr(max_depth):
+            print(line)
