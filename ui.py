@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 
 import pygame
@@ -12,24 +13,10 @@ class Button:
     action: str
 
     def __getitem__(self, key):
-        # позволяет обращаться как к словарю: btn["rect"]
         return getattr(self, key)
 
 class UI:
     def __init__(self, screen, heap):
-        """
-        Инициализация UI.
-
-        - Создаёт кешируемые поверхности:
-          - toolbar_surface: верхняя панель с кнопками и инпутом; перерисовывается только при изменениях.
-          - bars_surface: слой с барами и подписями значений кучи.
-          - overlay: временный слой поверх bars_surface для анимаций (swap/move/appear).
-        - Хранит snapshot кучи, чтобы понять, нужно ли перерисовывать bars_surface.
-        - Настраивает состояние UI: кнопки, поле ввода, hover и т.д.
-        - Настраивает очередь анимаций (anim_queue), текущую анимацию (current_anim),
-          и подсветку compare (highlight_pair / highlight_end).
-        - Подписывается на события кучи через set_observer, если он есть.
-        """
         self.screen = screen
         self.heap = heap
         self.font = pygame.font.SysFont("consolas", 20)
@@ -48,7 +35,7 @@ class UI:
         self.buttons = []
         self._build_buttons()
 
-        self.input_rect = pygame.Rect(20, 44, 160, 28)
+        self.input_rect = pygame.Rect(20, 94, 160, 28)
         self.input_active = False
         self.input_text = ""
 
@@ -61,27 +48,27 @@ class UI:
         self.highlight_pair = None
         self.highlight_end = 0
 
+        # новые состояния для расширенной функциональности
+        self.temp_message = None
+        self.message_end_time = 0
+        self.destructive_iterating = False
+        self.sorted_items = []
+
         # подписка на ивенты кучи
         if hasattr(self.heap, "set_observer"):
             self.heap.set_observer(self._on_heap_event)
 
     def _build_buttons(self):
-        """
-        Перестраивает массив кнопок на тулбаре:
-        - "Insert Rand": вставка случайного значения.
-        - "To Max-Heap"/"To Min-Heap": переключение режима.
-        - "Pop": удалить корень.
-        - "Reset": очистить кучу.
-
-        Каждой кнопке задаётся прямоугольник (rect) для клика.
-
-        Вызывается также после смены режима (toggle), чтобы обновить подписи.
-        Помечает тулбар как "нуждающийся в перерисовке".
-        """
+        """Добавлены новые кнопки для расширенной функциональности"""
         labels = [
             ("Insert Rand", "insert_rand"),
             (self._toggle_label(), "toggle_mode"),
             ("Pop", "pop"),
+            ("PushPop", "pushpop"),
+            ("Replace", "replace"),
+            ("5 Largest", "nlargest"),
+            ("Sort All", "sort_all"),
+            ("Stats", "show_stats"),
             ("Reset", "reset"),
         ]
 
@@ -95,40 +82,42 @@ class UI:
         self.buttons.clear()
 
         x = START_X
-        for label, action in labels:
+        y = START_Y
+        max_width = WIDTH - 40
+        current_width = 0
+
+        # Определяем высоту одной строки кнопок
+        sample_text_w, sample_text_h = self.font.size("Sample")
+        button_height = sample_text_h + PADDING_Y * 2
+        row_height = button_height + 5  # +5 для отступа между строками
+
+        for i, (label, action) in enumerate(labels):
             text_w, text_h = self.font.size(label)
             width = text_w + PADDING_X * 2
             height = text_h + PADDING_Y * 2
 
-            rect = pygame.Rect(x, START_Y, width, height)
+            # Перенос на новую строку если не помещается
+            if current_width + width > max_width and current_width > 0:
+                y += row_height
+                x = START_X
+                current_width = 0
+
+            rect = pygame.Rect(x, y, width, height)
             self.buttons.append(Button(rect, label, action))
 
             x += width + SPACING
+            current_width += width + SPACING
+
+        # Поле ввода располагаем под всеми кнопками с отступом
+        input_y = y + row_height + 10
+        self.input_rect = pygame.Rect(START_X, input_y, 160, 28)
 
         self.toolbar_needs_redraw = True
 
     def _toggle_label(self):
-        """
-        Возвращает подпись для кнопки переключения режима кучи.
-        Если сейчас min_heap=True → предлагаем перейти в Max-Heap.
-        И наоборот.
-        """
         return "To Max-Heap" if self.heap.min_heap else "To Min-Heap"
 
     def handle_event(self, event):
-        """
-        Обрабатывает события Pygame уровня UI:
-        - MOUSEMOTION:
-            подсвечивает кнопку под курсором (hover), только если она активна;
-            если hover поменялся → тулбар помечается на перерисовку.
-        - MOUSEBUTTONDOWN (ЛКМ):
-            1) клик по кнопке Insert рядом с полем ввода вставляет введённое число.
-            2) клик по полю ввода активирует/деактивирует фокус (input_active).
-            3) клик по обычным кнопкам ("Pop", "Reset", и т.п.) вызывает _run_action.
-        - KEYDOWN:
-            если у инпута есть фокус → символы уходят в _handle_text_input;
-            иначе используются хоткеи (_handle_shortcuts).
-        """
         if event.type == pygame.MOUSEMOTION:
             new_hover = None
             for btn in self.buttons:
@@ -140,20 +129,17 @@ class UI:
                 self.toolbar_needs_redraw = True
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            # клик по маленькой кнопке Insert рядом с полем ввода
             if self.insert_btn_rect and self.insert_btn_rect.collidepoint(event.pos):
                 if self.input_text:
                     self._insert_from_input()
                     self.toolbar_needs_redraw = True
                 return
 
-            # переключение фокуса ввода
             was_active = self.input_active
             self.input_active = self.input_rect.collidepoint(event.pos)
             if self.input_active != was_active:
                 self.toolbar_needs_redraw = True
 
-            # клики по остальным кнопкам тулбара
             for btn in self.buttons:
                 if btn["rect"].collidepoint(event.pos) and self._is_enabled(btn):
                     self._run_action(btn["action"])
@@ -166,19 +152,15 @@ class UI:
                 self._handle_shortcuts(event)
 
     def _handle_shortcuts(self, event):
-        """
-        Горячие клавиши:
-        I → insert_rand
-        P → pop
-        M → toggle_mode
-        R → reset
-
-        После выполнения некоторых действий (например, toggle_mode)
-        тулбар может нуждаться в перерисовке, поэтому помечаем его.
-        """
+        """Добавлены горячие клавиши для новых функций"""
         keymap = {
             pygame.K_i: "insert_rand",
             pygame.K_p: "pop",
+            pygame.K_t: "pushpop",
+            pygame.K_e: "replace",
+            pygame.K_l: "nlargest",
+            pygame.K_s: "sort_all",
+            pygame.K_d: "show_stats",
             pygame.K_m: "toggle_mode",
             pygame.K_r: "reset",
         }
@@ -188,17 +170,6 @@ class UI:
             self.toolbar_needs_redraw = True
 
     def _handle_text_input(self, event):
-        """
-        Обработка ввода текста в поле инпута:
-
-        - ENTER: попытаться вставить число из инпута в кучу (push).
-        - BACKSPACE: удалить последний символ.
-        - ESC: снять фокус с инпута.
-        - Любой другой ввод:
-            принимаются цифры и один ведущий минус.
-            длина ограничена (6 символов).
-        После любого изменения текста тулбар надо перерисовать.
-        """
         if event.key == pygame.K_RETURN:
             self._insert_from_input()
         elif event.key == pygame.K_BACKSPACE:
@@ -207,31 +178,16 @@ class UI:
             self.input_active = False
         else:
             ch = event.unicode
-            # разрешаем "-" только в начале
             if (ch.isdigit() or (ch == "-" and not self.input_text)) and len(self.input_text) < 6:
                 self.input_text += ch
 
         self.toolbar_needs_redraw = True
 
     def _run_action(self, action: str):
-        """
-        Выполняет семантику кнопок/хоткеев:
-
-        - insert_rand:
-            push случайного int [1..99] в кучу.
-        - toggle_mode:
-            если у кучи есть метод toggle_mode() → вызываем его;
-            иначе инвертируем флаг min_heap вручную и вызываем heapify(), если есть.
-        - pop:
-            pop() из кучи (если она не пустая).
-        - reset:
-            clear() кучи.
-
-        В конце пересобирает кнопки (_build_buttons),
-        т.к. подпись toggle может поменяться, и тулбар нужно перерисовать.
-        """
+        """Добавлена обработка новых действий"""
         if action == "insert_rand":
             self.heap.push(random.randint(1, 99))
+
         elif action == "toggle_mode":
             if hasattr(self.heap, "toggle_mode"):
                 self.heap.toggle_mode()
@@ -239,23 +195,139 @@ class UI:
                 self.heap.min_heap = not self.heap.min_heap
                 if hasattr(self.heap, "heapify"):
                     self.heap.heapify()
+
         elif action == "pop" and len(self.heap) > 0:
             self.heap.pop()
+
+        elif action == "pushpop" and self.input_text:
+            self._run_pushpop()
+
+        elif action == "replace" and self.input_text:
+            self._run_replace()
+
+        elif action == "nlargest":
+            self._run_nlargest()
+
+        elif action == "sort_all":
+            self._run_sort_all()
+
+        elif action == "show_stats":
+            self._show_stats()
+
         elif action == "reset":
             self.heap.clear()
+            self.destructive_iterating = False
+            self.sorted_items = []
 
         self._build_buttons()
 
+    def _run_pushpop(self):
+        """Выполняет pushpop с введенным значением"""
+        try:
+            v = int(self.input_text)
+            v = max(-10_000, min(10_000, v))
+            if hasattr(self.heap, 'pushpop'):
+                result = self.heap.pushpop(v)
+                self._show_temp_message(f"PushPop: {v} → returned {result}")
+            else:
+                # Эмуляция pushpop если метод отсутствует
+                result = self.heap.pop() if len(self.heap) > 0 else None
+                self.heap.push(v)
+                self._show_temp_message(f"PushPop emulated: {v} → returned {result}")
+        except ValueError:
+            pass
+        self.input_text = ""
+        self.input_active = False
+
+    def _run_replace(self):
+        """Выполняет replace с введенным значением"""
+        try:
+            v = int(self.input_text)
+            v = max(-10_000, min(10_000, v))
+            if hasattr(self.heap, 'replace'):
+                result = self.heap.replace(v)
+                self._show_temp_message(f"Replace: {v} → returned {result}")
+            else:
+                # Эмуляция replace если метод отсутствует
+                if len(self.heap) > 0:
+                    result = self.heap.pop()
+                    self.heap.push(v)
+                    self._show_temp_message(f"Replace emulated: {v} → returned {result}")
+                else:
+                    self.heap.push(v)
+                    self._show_temp_message(f"Heap was empty, pushed: {v}")
+        except ValueError:
+            pass
+        self.input_text = ""
+        self.input_active = False
+
+    def _run_nlargest(self):
+        """Показывает 5 наибольших/наименьших элементов"""
+        try:
+            if hasattr(self.heap, 'nlargest'):
+                items = self.heap.nlargest(5)
+                heap_type = "Min" if self.heap.min_heap else "Max"
+                self._show_temp_message(f"5 largest in {heap_type}-Heap: {items}")
+            else:
+                # Эмуляция nlargest
+                temp = list(self.heap.data)
+                temp.sort(reverse=not self.heap.min_heap)
+                items = temp[:5]
+                heap_type = "Min" if self.heap.min_heap else "Max"
+                self._show_temp_message(f"5 largest in {heap_type}-Heap: {items}")
+        except Exception as e:
+            self._show_temp_message(f"Error: {str(e)}")
+
+    def _run_sort_all(self):
+        """Запускает/останавливает разрушающую сортировку"""
+        if self.destructive_iterating:
+            self.destructive_iterating = False
+            self._show_temp_message("Sorting stopped")
+        else:
+            if hasattr(self.heap, 'destructive_iter'):
+                self.destructive_iterating = True
+                self.sorted_items = []
+                self._show_temp_message("Sorting started - click again to stop")
+            else:
+                # Эмуляция destructive_iter
+                temp = list(self.heap.data)
+                temp.sort(reverse=not self.heap.min_heap)
+                self._show_temp_message(f"Sorted: {temp}")
+
+    def _show_stats(self):
+        """Показывает статистику кучи"""
+        try:
+            if hasattr(self.heap, 'get_stats'):
+                stats = self.heap.get_stats()
+                messages = [
+                    f"Size: {stats['size']}",
+                    f"Depth: {stats['depth']}",
+                    f"Mode: {stats['mode']}",
+                    f"Valid: {stats['is_valid']}",
+                    f"Perfect: {stats['is_perfect']}",
+                    f"Operations: {stats['operations_count']}"
+                ]
+                self._show_temp_message("\n".join(messages))
+            else:
+                # Базовая статистика
+                depth = int(math.log2(len(self.heap.data))) + 1 if self.heap.data else 0
+                is_perfect = (len(self.heap.data) & (len(self.heap.data) + 1)) == 0
+                messages = [
+                    f"Size: {len(self.heap.data)}",
+                    f"Depth: {depth}",
+                    f"Mode: {'min' if self.heap.min_heap else 'max'}",
+                    f"Perfect: {is_perfect}"
+                ]
+                self._show_temp_message("\n".join(messages))
+        except Exception as e:
+            self._show_temp_message(f"Stats error: {str(e)}")
+
+    def _show_temp_message(self, message: str, duration: float = 3.0):
+        """Показывает временное сообщение"""
+        self.temp_message = message
+        self.message_end_time = time.perf_counter() + duration
+
     def _insert_from_input(self):
-        """
-        Пробует преобразовать текст из self.input_text в число и добавить в кучу:
-        - Парсит int.
-        - Кладёт его в диапазон [-10000, 10000].
-        - Вызывает heap.push(v).
-        После успешной (или неуспешной) попытки:
-        - очищает поле,
-        - снимает фокус.
-        """
         try:
             v = int(self.input_text)
             v = max(-10_000, min(10_000, v))
@@ -266,30 +338,18 @@ class UI:
         self.input_active = False
 
     def _is_enabled(self, btn) -> bool:
-        """
-        Возвращает False для кнопки Pop, если куча пустая.
-        Остальные кнопки всегда активны.
-        """
-        return not (btn["action"] == "pop" and len(self.heap) == 0)
+        """Добавлены проверки для новых кнопок"""
+        if btn["action"] == "pop" and len(self.heap) == 0:
+            return False
+        if btn["action"] in ["pushpop", "replace"] and not self.input_text:
+            return False
+        if btn["action"] == "nlargest" and len(self.heap) == 0:
+            return False
+        if btn["action"] == "sort_all" and len(self.heap) == 0:
+            return False
+        return True
 
     def _on_heap_event(self, event: str, payload: dict):
-        """
-        Колбэк-наблюдатель, вызывается кучей (heap.set_observer -> self._on_heap_event).
-
-        Куча репортит события:
-        - "compare": подсветка сравниваемых индексов.
-        - "swap":    анимация обмена значений двух индексов.
-        - "move":    анимация перемещения значения src→dst.
-        - "insert":  анимация появления нового значения.
-
-        Мы транслируем это в очередь анимаций self.anim_queue:
-        кладём dict с:
-            "type"  (compare/swap/move/appear),
-            "dur"   (продолжительность в секундах),
-            "payload" (данные, например индексы и значения).
-
-        Для insert, если не указан index, считаем что это последний элемент.
-        """
         mapping = {
             "compare": (ANIM_COMPARE_MS, "compare"),
             "swap": (ANIM_SWAP_MS, "swap"),
@@ -313,19 +373,21 @@ class UI:
         })
 
     def draw(self):
-        """
-        Главный публичный рендер-метод. Вызывается каждый кадр.
+        """Обновлен для поддержки разрушающей сортировки и временных сообщений"""
+        # Обработка разрушающей сортировки
+        if self.destructive_iterating and not self.anim_queue and not self.current_anim:
+            if hasattr(self.heap, 'destructive_iter') and len(self.heap) > 0:
+                try:
+                    # Берем следующий элемент из итератора
+                    if not hasattr(self, '_destructive_iter'):
+                        self._destructive_iter = self.heap.destructive_iter()
+                    item = next(self._destructive_iter)
+                    self.sorted_items.append(item)
+                except StopIteration:
+                    self.destructive_iterating = False
+                    delattr(self, '_destructive_iter')
+                    self._show_temp_message(f"Sorting complete! Sorted: {self.sorted_items}")
 
-        Логика перерисовки оптимизирована так:
-        - Верхняя панель (toolbar_surface) перерисовывается только если был флаг toolbar_needs_redraw.
-        - bars_surface (бары) перерисовывается И только тогда, когда изменилась куча,
-          или запустилась/изменилась анимация, или активна подсветка compare.
-
-        Порядок финального бленда на экран:
-        1. bars_surface
-        2. toolbar_surface
-        3. текст статуса/хоткеев снизу (рисуется сразу в self.screen)
-        """
         if self.toolbar_needs_redraw:
             self._redraw_toolbar()
 
@@ -334,18 +396,43 @@ class UI:
         self.screen.blit(self.bars_surface, (0, 0))
         self.screen.blit(self.toolbar_surface, (0, 0))
         self._draw_info_text()
+        self._draw_temp_message()
+        self._draw_sort_progress()
+
+    def _draw_temp_message(self):
+        """Рисует временное сообщение"""
+        if self.temp_message and time.perf_counter() < self.message_end_time:
+            lines = self.temp_message.split('\n')
+            y = HEIGHT - 150
+
+            # Фон для сообщения
+            max_width = max(self.font.size(line)[0] for line in lines)
+            bg_rect = pygame.Rect(20, y - 5, max_width + 20, len(lines) * 25 + 10)
+            pygame.draw.rect(self.screen, (40, 40, 60), bg_rect, border_radius=5)
+            pygame.draw.rect(self.screen, (100, 100, 150), bg_rect, 2, border_radius=5)
+
+            for line in lines:
+                text = self.font.render(line, True, (220, 220, 100))
+                self.screen.blit(text, (30, y))
+                y += 25
+
+    def _draw_sort_progress(self):
+        """Показывает прогресс сортировки"""
+        if self.destructive_iterating:
+            progress = len(self.sorted_items) / (len(self.sorted_items) + len(self.heap.data)) if (len(self.sorted_items) +
+                                                                                                   len(self.heap.data)) > 0 else 0
+            text = self.font.render(f"Sorting... {len(self.sorted_items)} items extracted", True, (255, 200, 100))
+            self.screen.blit(text, (WIDTH - 300, HEIGHT - 100))
+
+            # Прогресс-бар
+            bar_rect = pygame.Rect(WIDTH - 300, HEIGHT - 70, 280, 20)
+            pygame.draw.rect(self.screen, (60, 60, 80), bar_rect, border_radius=3)
+            fill_width = int(280 * progress)
+            if fill_width > 0:
+                fill_rect = pygame.Rect(bar_rect.x, bar_rect.y, fill_width, 20)
+                pygame.draw.rect(self.screen, (100, 200, 100), fill_rect, border_radius=3)
 
     def _redraw_toolbar(self):
-        """
-        Полная перерисовка поверхности тулбара (toolbar_surface):
-        - фон панели,
-        - кнопки (состояния normal/hover/disabled),
-        - поле ввода числа,
-        - кнопка Insert справа от поля ввода.
-
-        Также обновляет self.insert_btn_rect.
-        В конце снимает флаг toolbar_needs_redraw.
-        """
         surf = self.toolbar_surface
         surf.fill(PANEL_BG)
 
@@ -361,7 +448,10 @@ class UI:
 
             pygame.draw.rect(surf, bg, rect, border_radius=6)
             label_surf = self.font.render(btn["label"], True, TEXT_COLOR)
-            surf.blit(label_surf, (rect.x + 12, rect.y + 4))
+            # Центрируем текст в кнопке
+            text_x = rect.x + (rect.width - label_surf.get_width()) // 2
+            text_y = rect.y + (rect.height - label_surf.get_height()) // 2
+            surf.blit(label_surf, (text_x, text_y))
 
         # поле ввода
         pygame.draw.rect(
@@ -374,33 +464,29 @@ class UI:
         placeholder = self.input_text or "Type number…"
         ph_color = (200, 200, 200) if self.input_text else (130, 130, 150)
         txt = self.small.render(placeholder, True, ph_color)
-        surf.blit(txt, (self.input_rect.x + 8, self.input_rect.y + 6))
+        # Центрируем текст в поле ввода
+        text_x = self.input_rect.x + 8
+        text_y = self.input_rect.y + (self.input_rect.height - txt.get_height()) // 2
+        surf.blit(txt, (text_x, text_y))
 
-        # кнопка Insert рядом с инпутом
-        self.insert_btn_rect = pygame.Rect(self.input_rect.right + 8, self.input_rect.y, 90, 28)
+        # кнопка Insert рядом с инпутом - на той же высоте
+        self.insert_btn_rect = pygame.Rect(
+            self.input_rect.right + 8,
+            self.input_rect.y,  # та же Y-координата что и у поля ввода
+            90,
+            self.input_rect.height  # та же высота что и у поля ввода
+        )
         btn_bg = BTN_BG if self.input_text else BTN_BG_DISABLED
         pygame.draw.rect(surf, btn_bg, self.insert_btn_rect, border_radius=6)
         label = self.font.render("Insert", True, TEXT_COLOR)
-        surf.blit(label, (self.insert_btn_rect.x + 16, self.insert_btn_rect.y + 4))
+        # Центрируем текст в кнопке Insert
+        label_x = self.insert_btn_rect.x + (self.insert_btn_rect.width - label.get_width()) // 2
+        label_y = self.insert_btn_rect.y + (self.insert_btn_rect.height - label.get_height()) // 2
+        surf.blit(label, (label_x, label_y))
 
         self.toolbar_needs_redraw = False
 
     def _redraw_bars_if_needed(self):
-        """
-        Обновляет bars_surface при необходимости.
-
-        bars_surface перерисовывается, если:
-        - Данные кучи изменились с прошлого кадра.
-        - Идёт анимация (или только что началась/закончилась).
-        - Есть активная подсветка compare (highlight_pair) или она только что пропала.
-        - Куча стала пустой (иначе могли остаться старые бары).
-
-        Шаги:
-        1. Берём snapshot массива heap.data.
-        2. Продвигаем анимацию (_advance_animation), это может повлиять на подсветку/overlay.
-        3. Проверяем, надо ли перерисовывать и, если надо, вызываем _draw_bars_surface(values).
-        4. Обновляем snapshot.
-        """
         values = getattr(self.heap, "data", [])
         values_snapshot = tuple(values)
 
@@ -419,19 +505,6 @@ class UI:
         self._last_values_snapshot = values_snapshot
 
     def _draw_bars_surface(self, values):
-        """
-        Перерисовывает bars_surface с нуля и, при наличии активной анимации,
-        рисует движущиеся бары на overlay и наслаивает overlay.
-
-        Поведение:
-        - Если куча пустая → пишем подсказку по центру.
-        - Иначе для каждого значения рисуется вертикальная колонка:
-            * высота зависит от |val|
-            * цвет и прозрачность зависят от значения
-            * индексы, участвующие в активной анимации (swap/move/appear),
-              на основном слое не рисуются — они пойдут на overlay.
-        - Рисуем базовую линию оси X.
-        """
         surf = self.bars_surface
         surf.fill((0, 0, 0, 0))
 
@@ -464,11 +537,11 @@ class UI:
         if self.current_anim:
             p = self.current_anim["payload"]
             exclude = {
-                p.get("i"),
-                p.get("j"),
-                p.get("dst"),
-                p.get("index"),
-            } - {None}
+                          p.get("i"),
+                          p.get("j"),
+                          p.get("dst"),
+                          p.get("index"),
+                      } - {None}
 
         vmin = min(values)
         vmax_val = max(values)
@@ -505,28 +578,12 @@ class UI:
             surf.blit(self.overlay, (0, 0))
 
     def _alpha_for_value(self, val, vmin, vmax) -> int:
-        """
-        Возвращает альфа-канал (прозрачность) бара для значения val.
-        Диапазон 128..255, линейно относительно минимума/максимума кучи.
-        Если весь массив одинаковый → 255.
-        """
         if vmax == vmin:
             return 255
         t = (val - vmin) / (vmax - vmin)
         return 128 + int(t * 127)
 
     def _draw_active_overlay_onto_overlay(self, values, bar_width, scale, base_y):
-        """
-        Рисует "летящие" бары текущей анимации (swap/move/appear)
-        на self.overlay.
-
-        Логика:
-        - swap: два индекса i и j обмениваются позициями.
-        - move: один бар переезжает с src на dst.
-        - appear: новый бар появляется с нарастающей прозрачностью.
-
-        После отрисовки overlay потом накладывается на bars_surface.
-        """
         t = self.current_anim
         kind = t["type"]
         p = t["payload"]
@@ -565,23 +622,11 @@ class UI:
             draw_bar(x, val, APPEAR_COLOR, alpha=alpha)
 
     def _advance_animation(self):
-        """
-        Продвигает очередь анимаций и управляет состоянием подсветки сравнения.
-
-        Поведение:
-        - highlight_pair (подсветка compare) живёт до highlight_end.
-        - Если сейчас нет активной анимации current_anim, но есть anim_queue:
-            * Если это compare → просто ставим highlight_pair и таймер, а current_anim не запускаем.
-            * Иначе запускаем анимацию и сохраняем её как current_anim (с t0=now).
-        - Если current_anim есть и прогресс >= 1.0 → завершаем (current_anim = None).
-        """
         now = time.perf_counter()
 
-        # убрать compare-подсветку по таймеру
         if self.highlight_pair and now >= self.highlight_end:
             self.highlight_pair = None
 
-        # если анимации нет — пробуем взять следующую
         if not self.current_anim and self.anim_queue:
             item = self.anim_queue.pop(0)
             item["t0"] = now
@@ -594,35 +639,32 @@ class UI:
                 self.current_anim = item
             return
 
-        # если анимация есть — проверяем, не закончилась ли
         if self.current_anim:
             if self._anim_progress(self.current_anim) >= 1.0:
                 self.current_anim = None
 
     @staticmethod
     def _anim_progress(anim):
-        """
-        Возвращает прогресс анимации [0..1] на основе perf_counter().
-        Если длительность <= 0 — сразу считаем анимацию завершённой.
-        """
         span = anim["dur"]
         if span <= 0:
             return 1.0
         return min(1.0, (time.perf_counter() - anim["t0"]) / span)
 
     def _draw_info_text(self):
-        """
-        Рисует внизу экрана (на self.screen, не на кешированных слоях):
-        - хоткеи [I/P/M/R] и текущий режим (Min-Heap / Max-Heap),
-        - статус "HEAP OK" или "HEAP BROKEN" с цветовой индикацией,
-          причём корректность проверяется через heap.is_valid_heap(), если метод есть.
-        """
         mode = "Min-Heap" if self.heap.min_heap else "Max-Heap"
-        info = self.font.render(
-            f"[I] InsertRand  [P] Pop  [M] Toggle  [R] Reset   ({mode})",
-            True,
-            TEXT_COLOR,
-        )
+        info_lines = [
+            "[I] InsertRand  [P] Pop  [T] PushPop  [E] Replace",
+            "[L] 5 Largest  [S] Sort  [D] Stats  [M] Toggle  [R] Reset"
+        ]
+
+        y_pos = HEIGHT - 70
+        for line in info_lines:
+            info = self.font.render(line, True, TEXT_COLOR)
+            self.screen.blit(info, (20, y_pos))
+            y_pos += 25
+
+        mode_text = self.font.render(f"({mode})", True, TEXT_COLOR)
+        self.screen.blit(mode_text, (WIDTH - 120, HEIGHT - 45))
 
         status_ok = True
         if hasattr(self.heap, "is_valid_heap"):
@@ -634,6 +676,4 @@ class UI:
         status_text = "HEAP OK" if status_ok else "HEAP BROKEN"
         status_color = ACCENT_OK if status_ok else ACCENT_BAD
         status = self.font.render(status_text, True, status_color)
-
-        self.screen.blit(status, (20, HEIGHT - 62))
-        self.screen.blit(info, (20, HEIGHT - 36))
+        self.screen.blit(status, (WIDTH - 120, HEIGHT - 70))
