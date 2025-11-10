@@ -58,34 +58,16 @@ class Heap(Generic[T]):
 
     def push(self, value: T) -> None:
         """
-        Добавляет элемент в кучу (вставка с последующим подъёмом).
-
-        Args:
-            value: Вставляемый элемент.
-
-        Raises:
-            ValueError: При недопустимом значении (например, key(value) даёт NaN
-                        при nan_policy='raise', либо key() бросает исключение).
+        Добавляет элемент в кучу и восстанавливает инвариант.
         """
-        # Предварительная нормализация значения (NaN и key) — для ранней валидации
-        try:
-            _ = self._normalize_key(self.key(value) if self.key else value)
-        except Exception as e:
-            raise ValueError(f"Invalid value for heap: {value!r} ({e})") from e
-
         with self._mutation("push"):
             n_before = len(self.data)
-            self._notify("insert_start", value=value, index=n_before)
-
-            # Фактическая вставка
             self.data.append(value)
             self._notify("insert", index=n_before, value=value)
 
             try:
-                # Восстанавливаем инвариант
                 self._heapify_up(n_before)
             except Exception as e:
-                # Если сравнение/heapify сломались — удаляем элемент обратно
                 popped = self.data.pop()
                 self._notify("insert_error", value=popped, error=str(e))
                 raise
@@ -610,10 +592,9 @@ class Heap(Generic[T]):
             return
 
         with self._mutation("merge"):
-            old_size = len(self.data)
             self.data.extend(other.data)
             self.heapify()
-            self._notify("merge", added=len(other.data), old_size=old_size)
+            self._notify("merge_done", added=len(other.data))
 
     def items(self) -> List[T]:
         """
