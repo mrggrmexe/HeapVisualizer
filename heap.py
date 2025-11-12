@@ -58,16 +58,34 @@ class Heap(Generic[T]):
 
     def push(self, value: T) -> None:
         """
-        Добавляет элемент в кучу и восстанавливает инвариант.
+        Добавляет элемент в кучу (вставка с последующим подъёмом).
+
+        Args:
+            value: Вставляемый элемент.
+
+        Raises:
+            ValueError: При недопустимом значении (например, key(value) даёт NaN
+                        при nan_policy='raise', либо key() бросает исключение).
         """
+        # Предварительная нормализация значения (NaN и key) — для ранней валидации
+        try:
+            _ = self._normalize_key(self.key(value) if self.key else value)
+        except Exception as e:
+            raise ValueError(f"Invalid value for heap: {value!r} ({e})") from e
+
         with self._mutation("push"):
             n_before = len(self.data)
+            self._notify("insert_start", value=value, index=n_before)
+
+            # Фактическая вставка
             self.data.append(value)
             self._notify("insert", index=n_before, value=value)
 
             try:
+                # Восстанавливаем инвариант
                 self._heapify_up(n_before)
             except Exception as e:
+                # Если сравнение/heapify сломались — удаляем элемент обратно
                 popped = self.data.pop()
                 self._notify("insert_error", value=popped, error=str(e))
                 raise
@@ -504,27 +522,28 @@ class Heap(Generic[T]):
 
     def nlargest(self, n: int) -> List[T]:
         """
-        Возвращает n наибольших элементов кучи (для min-heap) или
-        n наименьших (для max-heap) без изменения структуры.
+        Возвращает n наибольших элементов (если это min-heap) или
+        n наименьших (если это max-heap) **без** изменения структуры.
 
         Args:
             n: Количество элементов для возврата.
 
         Returns:
-            Список из n элементов в соответствующем порядке.
+            Список из n элементов. Порядок — от большего к меньшему для min-heap
+            и от меньшего к большему для max-heap.
         """
         if n <= 0:
             return []
 
-        # Создаем временную копию для извлечения элементов
-        temp_heap = Heap(min_heap=self.min_heap, key=self.key)
-        temp_heap.data = self.data.copy()
+        # Используем сортировку с учётом key() и nan_policy
+        # Для min-heap берём самые большие (reverse=True), для max-heap — самые маленькие.
+        try:
+            sorted_data = sorted(self.data, key=self._k, reverse=self.min_heap)
+        except Exception as e:
+            # В случае проблем с key()/nan_policy пробрасываем ValueError наружу
+            raise ValueError(f"Failed to compute keys for nlargest(): {e}") from e
 
-        result = []
-        for _ in range(min(n, len(temp_heap))):
-            result.append(temp_heap.pop())
-
-        return result
+        return sorted_data[: min(n, len(sorted_data))]
 
     def pushpop(self, value: T) -> T:
         """
@@ -559,11 +578,13 @@ class Heap(Generic[T]):
             value: Значение для добавления.
 
         Returns:
-            Извлечённый корневой элемент.
+            Извлечённый корневой элемент (старый корень).
+
+        Raises:
+            IndexError: Если куча пуста. Для пустой кучи используйте push().
         """
         if not self.data:
-            self.push(value)
-            return None
+            raise IndexError("replace() on an empty heap; use push() instead")
 
         with self._mutation("replace"):
             root = self.data[0]
@@ -592,9 +613,10 @@ class Heap(Generic[T]):
             return
 
         with self._mutation("merge"):
+            old_size = len(self.data)
             self.data.extend(other.data)
             self.heapify()
-            self._notify("merge_done", added=len(other.data))
+            self._notify("merge", added=len(other.data), old_size=old_size)
 
     def items(self) -> List[T]:
         """
