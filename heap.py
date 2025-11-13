@@ -66,28 +66,42 @@ class Heap(Generic[T]):
         Raises:
             ValueError: При недопустимом значении (например, key(value) даёт NaN
                         при nan_policy='raise', либо key() бросает исключение).
+            Любое исключение из key()/observer/_heapify_up пробрасывается дальше,
+            при этом состояние кучи откатывается к исходному.
         """
-        # Предварительная нормализация значения (NaN и key) — для ранней валидации
+        # --- 1. Предварительная валидация значения ---
         try:
-            _ = self._normalize_key(self.key(value) if self.key else value)
+            raw_key = self.key(value) if self.key else value
+            _ = self._normalize_key(raw_key)
         except Exception as e:
+            # На этом этапе к куче мы ещё не прикасались, так что состояние не меняем
             raise ValueError(f"Invalid value for heap: {value!r} ({e})") from e
 
+        # --- 2. Безопасная мутация структуры ---
         with self._mutation("push"):
             n_before = len(self.data)
             self._notify("insert_start", value=value, index=n_before)
+
+            # Сохраняем снапшот для отката в случае любой ошибки
+            old_data = self.data.copy()
 
             # Фактическая вставка
             self.data.append(value)
             self._notify("insert", index=n_before, value=value)
 
+            # Пустая куча — самый простой случай: никакого подъёма не нужно
+            if n_before == 0:
+                self._notify("push_done", size=len(self.data))
+                return
+
             try:
                 # Восстанавливаем инвариант
                 self._heapify_up(n_before)
             except Exception as e:
-                # Если сравнение/heapify сломались — удаляем элемент обратно
-                popped = self.data.pop()
-                self._notify("insert_error", value=popped, error=str(e))
+                # Любая ошибка во время подъёма/observer:
+                # аккуратно откатываем список к исходному состоянию.
+                self.data = old_data
+                self._notify("insert_error", value=value, error=str(e))
                 raise
 
             self._notify("push_done", size=len(self.data))
