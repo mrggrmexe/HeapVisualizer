@@ -117,21 +117,29 @@ class Heap(Generic[T]):
             Извлечённый элемент или default, если куча пуста.
 
         Raises:
-            Любые исключения, возникшие в процессе восстановления инварианта,
-            пробрасываются наверх (после уведомления observer).
+            Любые исключения, возникшие в процессе восстановления инварианта
+            (включая ошибки key()/nan_policy/observer), пробрасываются наверх.
+            При этом при любой ошибке состояние кучи откатывается к исходному.
         """
         with self._mutation("pop"):
             if not self.data:
+                # Куча пуста — ничего не меняем, просто логируем и возвращаем default
                 self._notify("pop_empty", size=0)
                 return default
+
+            # Снапшот состояния кучи для отката
+            old_data = self.data.copy()
 
             self._notify("pop_start", size=len(self.data))
             try:
                 root = self.data[0]
                 self._notify("pop_root", value=root, size=len(self.data))
 
+                # Удаляем последний элемент
                 last = self.data.pop()
+
                 if self.data:
+                    # Переносим последний на корень и восстанавливаем инвариант
                     self.data[0] = last
                     self._notify("move", src=len(self.data), dst=0, value=last)
                     self._heapify_down(0)
@@ -140,7 +148,14 @@ class Heap(Generic[T]):
                 return root
 
             except Exception as e:
-                self._notify("pop_error", error=str(e), size=len(self.data))
+                # Откат состояния кучи
+                self.data = old_data
+                # Пытаемся уведомить observer об ошибке, но не даём ему сломать исходный стек
+                try:
+                    self._notify("pop_error", error=str(e), size=len(self.data))
+                except Exception:
+                    pass
+                # Пробрасываем исходное исключение
                 raise
 
     def peek(self) -> Optional[T]:
