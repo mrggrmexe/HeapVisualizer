@@ -174,12 +174,32 @@ class Heap(Generic[T]):
         Примечания:
             - Отправляет событие 'clear' с количеством очищенных элементов.
         """
+        # Даже если куча уже пуста — отправим событие (cleared=0),
+        # чтобы визуализатор/логика не ломались на нажатии "Clear".
         if not self.data:
+            self._notify("clear", cleared=0)
             return
+
         with self._mutation("clear"):
-            old_size = len(self.data)
-            self.data.clear()
-            self._notify("clear", cleared=old_size)
+            # Снапшот для отката в случае любой ошибки
+            old_data = self.data.copy()
+            old_size = len(old_data)
+
+            try:
+                # Основная операция
+                self.data.clear()
+                self._notify("clear", cleared=old_size)
+
+            except Exception as e:
+                # При любой ошибке пытаемся откатить состояние
+                self.data = old_data
+                # Не даём ошибке observer ещё раз сломать стек
+                try:
+                    self._notify("clear_error", cleared=0, error=str(e))
+                except Exception:
+                    pass
+                # Пробрасываем исходное исключение выше
+                raise
 
     def extend(self, items: Iterable[T]) -> None:
         """
