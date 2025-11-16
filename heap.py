@@ -203,29 +203,48 @@ class Heap(Generic[T]):
 
     def extend(self, items: Iterable[T]) -> None:
         """
-        Массово добавляет элементы и перестраивает кучу оптимальным образом.
-
-        Args:
-            items: Итерабельная коллекция добавляемых элементов.
-
-        Примечания:
-            - Для одного элемента быстрее вызвать push().
-            - Для нескольких элементов эффективнее выполнить extend + heapify().
+        Неизменяемо добавляет множество элементов в кучу.
+        Защищено от некорректных входных данных и ошибок heapify().
         """
-        items = list(items)
+
+        # --- Проверка входа ---
+        if items is None:
+            return  # тихое игнорирование None как "ничего не добавлять"
+
+        try:
+            items = list(items)
+        except TypeError:
+            raise TypeError("extend() ожидает итерируемый объект")
+
         if not items:
             return
 
-        n_added = len(items)
-        if n_added == 1:
-            # Для одного элемента быстрее сделать push
-            self.push(items[0])  # фикс опечатки: раньше было self.heappush(...)
-            self._notify("extend", added=1)
+        # --- Быстрый путь для одного элемента ---
+        if len(items) == 1:
+            try:
+                self.push(items[0])
+                self._notify("extend", added=1)
+            except Exception as exc:
+                raise RuntimeError(f"push() failed in extend(): {exc}") from exc
             return
 
+        # --- Массовая вставка ---
+        if not isinstance(self.data, list):
+            raise TypeError("Internal heap storage self.data повреждён — ожидается list")
+
         start_size = len(self.data)
-        self.data.extend(items)
-        self.heapify()
+
+        # Локальная копия для отката, если heapify() упадёт
+        backup = self.data.copy()
+
+        try:
+            self.data.extend(items)
+            self.heapify()
+        except Exception as exc:
+            # откат данных, чтобы не оставить структуру сломанной
+            self.data = backup
+            raise RuntimeError(f"heapify() failed in extend(): {exc}") from exc
+
         self._notify("extend", added=len(self.data) - start_size)
 
     def toggle_mode(self) -> None:
