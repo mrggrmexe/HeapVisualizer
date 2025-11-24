@@ -296,23 +296,57 @@ class Heap(Generic[T]):
 
         Returns:
             Количество удалённых элементов.
-
-        Примечания:
-            - Сохраняет инвариант кучи после каждого удаления.
         """
+        # --- Базовые проверки внутреннего состояния ---
+        if not hasattr(self, "data"):
+            raise AttributeError("Heap has no internal 'data' storage (self.data)")
+
+        if not isinstance(self.data, list):
+            raise TypeError("Internal heap storage self.data повреждён — ожидается list")
+
         removed = 0
         i = 0
+        remove_all = bool(all)
+
         while i < len(self.data):
-            if self.data[i] == value:
-                self._remove_at(i)
+            # Защитимся от странных реализаций __eq__
+            try:
+                is_equal = (self.data[i] == value)
+            except Exception as exc:
+                raise RuntimeError(f"Comparison failed in remove(): {exc}") from exc
+
+            if is_equal:
+                try:
+                    before = len(self.data)
+                    self._remove_at(i)
+                    after = len(self.data)
+                except Exception as exc:
+                    raise RuntimeError(f"_remove_at({i}) failed in remove(): {exc}") from exc
+
+                # Базовая sanity-проверка, чтобы не зависнуть в бесконечном цикле
+                if after >= before:
+                    raise RuntimeError(
+                        "_remove_at() не уменьшил размер кучи; "
+                        "возможен бесконечный цикл или нарушение инварианта."
+                    )
+
                 removed += 1
-                if not all:
+
+                if not remove_all:
                     break
+                # i не увеличиваем: на эту позицию попал новый элемент,
+                # нужно проверить его ещё раз на равенство value.
             else:
                 i += 1
 
         if removed:
-            self._notify("remove_value", value=value, count=removed)
+            try:
+                self._notify("remove_value", value=value, count=removed)
+            except Exception as exc:
+                # Поведение по выбору: либо проглатывать, либо поднимать ошибку.
+                # Здесь поднимаем, чтобы такие баги было видно сразу.
+                raise RuntimeError(f"_notify() failed in remove(): {exc}") from exc
+
         return removed
 
     def _remove_at(self, index: int) -> None:
