@@ -351,28 +351,81 @@ class Heap(Generic[T]):
 
     def _remove_at(self, index: int) -> None:
         """
-        Удаляет элемент по индексу с восстановлением инварианта.
+        Удаляет элемент по индексу с восстановлением инварианта кучи.
 
         Args:
             index: Индекс удаляемого элемента.
 
         Примечания:
             - Если индекс вне диапазона, метод ничего не делает.
-            - После удаления выполняются _heapify_down и _heapify_up, чтобы
-              корректно восстановить структуру.
         """
         with self._mutation("remove_at"):
+            # --- Проверка внутреннего состояния ---
+            if not hasattr(self, "data"):
+                raise AttributeError("Heap has no internal 'data' storage (self.data)")
+
+            if not isinstance(self.data, list):
+                raise TypeError("Internal heap storage self.data повреждён — ожидается list")
+
             n = len(self.data)
             if not (0 <= index < n):
+                # Вне диапазона — действительно «ничего не делаем»
                 return
 
-            last = self.data.pop()
-            if index < n - 1:
-                self.data[index] = last
-                self._heapify_down(index)
-                self._heapify_up(index)
+            # --- Удаляем последний элемент ---
+            try:
+                last = self.data.pop()
+            except Exception as exc:
+                raise RuntimeError(f"pop() failed in _remove_at(): {exc}") from exc
 
-            self._notify("remove_at", index=index, size=len(self.data))
+            # Если удаляем последний элемент — куча по-прежнему валидна
+            if index == n - 1:
+                size = len(self.data)  # должно быть n - 1
+                try:
+                    self._notify("remove_at", index=index, size=size)
+                except Exception as exc:
+                    raise RuntimeError(f"_notify() failed in _remove_at(): {exc}") from exc
+                return
+
+            # --- Переносим последний элемент на место удалённого ---
+            self.data[index] = last
+
+            # --- Выбираем направление просеивания ---
+            try:
+                if index > 0:
+                    parent = (index - 1) // 2
+                    try:
+                        needs_up = self.data[index] < self.data[parent]
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Comparison failed in _remove_at() at index {index}: {exc}"
+                        ) from exc
+                else:
+                    # Корень — поднимать некуда, только вниз
+                    needs_up = False
+
+                if needs_up:
+                    self._heapify_up(index)
+                else:
+                    self._heapify_down(index)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Heapify failed in _remove_at() at index {index}: {exc}"
+                ) from exc
+
+            # --- Sanity-check размера ---
+            size = len(self.data)
+            if size != n - 1:
+                raise RuntimeError(
+                    f"_remove_at() corrupted heap size: expected {n - 1}, got {size}"
+                )
+
+            # --- Нотификация об успешном удалении ---
+            try:
+                self._notify("remove_at", index=index, size=size)
+            except Exception as exc:
+                # На этом этапе куча уже валидна; падаем только по причине логгера
+                raise RuntimeError(f"_notify() failed in _remove_at(): {exc}") from exc
 
     def to_list(self) -> List[T]:
         """
