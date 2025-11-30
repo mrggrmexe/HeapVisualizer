@@ -4,6 +4,8 @@ import math
 
 T = TypeVar("T")
 
+from contextlib import contextmanager
+from typing import Optional
 
 class Heap(Generic[T]):
     """
@@ -465,7 +467,6 @@ class Heap(Generic[T]):
         return f"<{kind} {self.data}>"
 
     # ---------- INTERNALS ----------
-
     @contextmanager
     def _mutation(self, opname: str):
         """
@@ -477,16 +478,50 @@ class Heap(Generic[T]):
         Raises:
             RuntimeError: При попытке реэнтрантного изменения кучи.
         """
+        # Гарантируем наличие служебных полей
+        if not hasattr(self, "_mutating"):
+            self._mutating: bool = False
+        if not hasattr(self, "_ops"):
+            self._ops: int = 0
+
         if self._mutating:
             raise RuntimeError(f"Re-entrant heap mutation in '{opname}'")
 
         self._mutating = True
+        exc: Optional[BaseException] = None
+
         try:
             yield
+        except BaseException as e:
+            # Запоминаем исходное исключение, чтобы не потерять
+            exc = e
+            raise
         finally:
+            # Всегда снимаем флаг, даже если внутри всё упало
             self._mutating = False
-            self._ops += 1
-            self._maybe_verify()
+
+            # Аккуратно увеличиваем счётчик операций
+            try:
+                self._ops = int(self._ops) + 1
+            except Exception:
+                # В случае порчи счётчика — жёсткий ресет
+                self._ops = 1
+
+            # Верификация структуры: не должна ломать основной поток исключений
+            verifier = getattr(self, "_maybe_verify", None)
+            if callable(verifier):
+                try:
+                    verifier()
+                except Exception as verify_exc:
+                    # Если уже есть основное исключение — не перебиваем его
+                    if exc is None:
+                        # здесь по желанию:
+                        # - либо поднять RuntimeError
+                        # - либо только залогировать
+                        raise RuntimeError(
+                            f"Heap verification failed after '{opname}': {verify_exc}"
+                        ) from verify_exc
+                    # если exc не None — просто проглатываем verify-ошибку
 
     def _maybe_verify(self):
         """
