@@ -737,26 +737,60 @@ class Heap(Generic[T]):
 
     def pushpop(self, value: T) -> T:
         """
-        Эквивалент последовательности push -> pop, но более эффективный.
+        Эквивалент последовательности push(value) -> pop(), но более эффективный.
 
-        Args:
-            value: Значение для добавления.
-
-        Returns:
-            Корневой элемент после вставки (может быть value или старый корень).
+        Если куча пуста или новый элемент "лучше" текущего корня (по _prefer),
+        результатом будет сам value, а куча останется без изменений.
+        В противном случае корень заменяется на value, куча восстанавливается,
+        а возвращается старый корень.
         """
         with self._mutation("pushpop"):
-            if not self.data or self._prefer(value, self.data[0]):
-                # Если куча пуста или новый элемент хуже корня
+            # --- Базовые проверки внутреннего состояния ---
+            if not hasattr(self, "data"):
+                raise AttributeError("Heap has no internal 'data' storage (self.data)")
+
+            if not isinstance(self.data, list):
+                raise TypeError("Internal heap storage self.data повреждён — ожидается list")
+
+            data = self.data
+
+            # --- Пустая куча: pushpop эквивалентен просто возврату value ---
+            if not data:
                 return value
 
-            # Сохраняем текущий корень
-            root = self.data[0]
+            # --- Проверка приоритета нового элемента относительно корня ---
+            try:
+                # Предполагаем, что _prefer(a, b) == True означает "a лучше b"
+                if self._prefer(value, data[0]):
+                    # Новый элемент лучше/выгоднее корня:
+                    # push(value); pop() вернул бы обратно value.
+                    return value
+            except Exception as exc:
+                raise RuntimeError(
+                    f"_prefer(value, root) failed in pushpop(): {exc}"
+                ) from exc
 
-            # Заменяем корень новым значением и восстанавливаем инвариант
-            self.data[0] = value
-            self._notify("replace_root", old_value=root, new_value=value)
-            self._heapify_down(0)
+            # --- Заменяем корень и восстанавливаем инвариант ---
+            root = data[0]
+            data[0] = value
+
+            try:
+                self._heapify_down(0)
+            except Exception as exc:
+                # В этот момент структура уже могла измениться частично.
+                # Сигнализируем явно, что куча может быть повреждена.
+                raise RuntimeError(
+                    f"_heapify_down(0) failed in pushpop(); heap may be corrupted: {exc}"
+                ) from exc
+
+            # --- Нотификация об успешной замене корня ---
+            try:
+                self._notify("replace_root", old_value=root, new_value=value)
+                # по желанию можно добавить:
+                # self._notify("pushpop", pushed=value, popped=root)
+            except Exception as exc:
+                # На этом этапе куча уже валидна; падаем только из-за observer'а
+                raise RuntimeError(f"_notify() failed in pushpop(): {exc}") from exc
 
             return root
 
