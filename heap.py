@@ -796,25 +796,56 @@ class Heap(Generic[T]):
 
     def replace(self, value: T) -> T:
         """
-        Эквивалент pop -> push, но более эффективный.
+        Эквивалент pop() -> push(value) для непустой кучи, но более эффективный.
 
         Args:
-            value: Значение для добавления.
+            value: Новое значение, которое займет место корня.
 
         Returns:
-            Извлечённый корневой элемент (старый корень).
+            Старый корневой элемент.
 
         Raises:
             IndexError: Если куча пуста. Для пустой кучи используйте push().
         """
+        # --- Базовая проверка внутреннего состояния ---
+        if not hasattr(self, "data"):
+            raise AttributeError("Heap has no internal 'data' storage (self.data)")
+
+        if not isinstance(self.data, list):
+            raise TypeError("Internal heap storage self.data повреждён — ожидается list")
+
         if not self.data:
             raise IndexError("replace() on an empty heap; use push() instead")
 
         with self._mutation("replace"):
-            root = self.data[0]
-            self.data[0] = value
-            self._notify("replace_root", old_value=root, new_value=value)
-            self._heapify_down(0)
+            data = self.data
+
+            # Сохраняем старый корень
+            root = data[0]
+            # Меняем корень на новое значение
+            data[0] = value
+
+            # Восстанавливаем инвариант кучи
+            try:
+                self._heapify_down(0)
+            except Exception as exc:
+                # На этом этапе структура уже могла частично измениться
+                raise RuntimeError(
+                    f"_heapify_down(0) failed in replace(); heap may be corrupted: {exc}"
+                ) from exc
+
+            # Минимальный sanity-check: размер кучи не должен поменяться
+            if len(data) == 0:
+                raise RuntimeError(
+                    "replace() corrupted heap: heap size became zero unexpectedly"
+                )
+
+            # Уведомляем observer'ов уже после восстановления инварианта
+            try:
+                self._notify("replace_root", old_value=root, new_value=value)
+            except Exception as exc:
+                # Куча уже валидна, падаем только из-за логгера/observer'а
+                raise RuntimeError(f"_notify() failed in replace(): {exc}") from exc
 
             return root
 
