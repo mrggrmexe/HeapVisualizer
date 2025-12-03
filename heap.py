@@ -955,39 +955,90 @@ class Heap(Generic[T]):
 
     def to_tree_repr(self, max_depth: int = 4) -> List[str]:
         """
-        Генерирует текстовое представление дерева для визуализации.
+        Генерирует текстовое представление кучи как бинарного дерева.
 
         Args:
-            max_depth: Максимальная глубина для отображения.
+            max_depth: Максимальное число уровней, которое нужно отображать
+                       (будет скорректировано до допустимого диапазона).
 
         Returns:
             Список строк, представляющих уровни дерева.
         """
-        if not self.data:
+        # --- Проверка внутреннего состояния ---
+        data = getattr(self, "data", None)
+        if not isinstance(data, list):
+            return ["[Invalid heap storage]"]
+
+        n = len(data)
+        if n == 0:
             return ["[Empty heap]"]
 
-        result = []
-        n = len(self.data)
-        depth = min(self.depth(), max_depth)
+        # --- Нормализуем max_depth ---
+        try:
+            max_depth_int = int(max_depth)
+        except (TypeError, ValueError):
+            max_depth_int = 4  # дефолт при некорректном значении
+
+        # минимум 1 уровень (хотя бы корень), максимум «разумная» глубина
+        GLOBAL_MAX_DEPTH = 10
+        if max_depth_int <= 0:
+            max_depth_int = 1
+        max_depth_int = min(max_depth_int, GLOBAL_MAX_DEPTH)
+
+        # --- Определяем реальную глубину дерева ---
+        # Пытаемся использовать self.depth(), если он есть и адекватен
+        try:
+            if hasattr(self, "depth") and callable(getattr(self, "depth")):
+                actual_depth = int(self.depth())
+                if actual_depth <= 0:
+                    raise ValueError
+            else:
+                raise AttributeError
+        except Exception:
+            # fallback: оцениваем глубину по количеству элементов
+            # полное дерево из n узлов имеет depth ~= floor(log2(n)) + 1 уровней
+            actual_depth = int(math.floor(math.log2(n))) + 1
+
+        depth = min(actual_depth, max_depth_int)
+
+        result: List[str] = []
 
         for level in range(depth):
             start = 2 ** level - 1
             end = min(2 ** (level + 1) - 1, n)
-            level_items = []
+            if start >= n:
+                break  # дальше уровней уже нет
+
+            level_items: List[str] = []
 
             for i in range(start, end):
-                if i < n:
-                    item_str = str(self.data[i])
-                    if len(item_str) > 10:
-                        item_str = item_str[:10] + "..."
-                    level_items.append(item_str)
+                try:
+                    item_str = str(data[i])
+                except Exception:
+                    # на случай странного __str__
+                    item_str = repr(data[i])
 
-            indent = " " * (2 ** (depth - level) - 2)
-            separator = " " * (2 ** (depth - level + 1) - 2)
+                if len(item_str) > 10:
+                    item_str = item_str[:10] + "..."
+                level_items.append(item_str)
+
+            if not level_items:
+                continue
+
+            # Немного «деревянного» выравнивания: количество пробелов зависит от уровня.
+            indent_width = max(0, 2 ** (depth - level) - 2)
+            sep_width = max(1, 2 ** (depth - level + 1) - 2)
+
+            indent = " " * indent_width
+            separator = " " * sep_width
+
             result.append(f"{indent}{separator.join(level_items)}")
 
-        if len(self.data) > 2 ** max_depth - 1:
-            result.append(f"... and {len(self.data) - (2 ** max_depth - 1)} more items")
+        # --- Информация о скрытых элементах ---
+        # Максимальное число узлов в отображённых depth уровнях.
+        capacity_shown = min(2 ** depth - 1, n)
+        if n > capacity_shown:
+            result.append(f"... and {n - capacity_shown} more items")
 
         return result
 
