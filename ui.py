@@ -373,31 +373,96 @@ class UI:
         })
 
     def draw(self):
-        """Обновлен для поддержки разрушающей сортировки и временных сообщений"""
-        # Обработка разрушающей сортировки
-        if self.destructive_iterating and not self.anim_queue and not self.current_anim:
-            if hasattr(self.heap, 'destructive_iter') and len(self.heap) > 0:
+        """Рендер кадра + безопасная поддержка разрушающей сортировки и временных сообщений."""
+
+        # --- Безопасная обработка разрушающей сортировки ---
+        try:
+            if getattr(self, "destructive_iterating", False) \
+                    and not getattr(self, "anim_queue", None) \
+                    and not getattr(self, "current_anim", None):
+
+                heap = getattr(self, "heap", None)
+
+                if heap is not None and hasattr(heap, "destructive_iter") and len(heap) > 0:
+                    try:
+                        it = getattr(self, "_destructive_iter", None)
+                        if it is None:
+                            # создаём итератор только один раз
+                            it = heap.destructive_iter()
+                            self._destructive_iter = it
+
+                        item = next(it)
+
+                        if not hasattr(self, "sorted_items"):
+                            self.sorted_items = []
+                        self.sorted_items.append(item)
+
+                    except StopIteration:
+                        # сортировка завершена
+                        self.destructive_iterating = False
+                        if hasattr(self, "_destructive_iter"):
+                            del self._destructive_iter
+
+                        msg = f"Sorting complete! Sorted: {getattr(self, 'sorted_items', [])}"
+                        if hasattr(self, "_show_temp_message"):
+                            self._show_temp_message(msg)
+
+                    except Exception as sort_err:
+                        # любая другая ошибка при сортировке — останавливаем режим
+                        self.destructive_iterating = False
+                        if hasattr(self, "_destructive_iter"):
+                            del self._destructive_iter
+                        if hasattr(self, "_show_temp_message"):
+                            self._show_temp_message(f"Error during sorting: {sort_err}")
+        except Exception as outer_sort_err:
+            # защита от совсем неожиданных вещей вокруг сортировки
+            if hasattr(self, "_show_temp_message"):
+                self._show_temp_message(f"Unexpected sorting error: {outer_sort_err}")
+
+        # --- Перерисовка тулбара ---
+        if getattr(self, "toolbar_needs_redraw", False):
+            if hasattr(self, "_redraw_toolbar"):
                 try:
-                    # Берем следующий элемент из итератора
-                    if not hasattr(self, '_destructive_iter'):
-                        self._destructive_iter = self.heap.destructive_iter()
-                    item = next(self._destructive_iter)
-                    self.sorted_items.append(item)
-                except StopIteration:
-                    self.destructive_iterating = False
-                    delattr(self, '_destructive_iter')
-                    self._show_temp_message(f"Sorting complete! Sorted: {self.sorted_items}")
+                    self._redraw_toolbar()
+                except Exception as tb_err:
+                    # чтобы не лагало бесконечно, сбросим флаг
+                    self.toolbar_needs_redraw = False
+                    if hasattr(self, "_show_temp_message"):
+                        self._show_temp_message(f"Toolbar redraw error: {tb_err}")
 
-        if self.toolbar_needs_redraw:
-            self._redraw_toolbar()
+        # --- Перерисовка баров ---
+        if hasattr(self, "_redraw_bars_if_needed"):
+            try:
+                self._redraw_bars_if_needed()
+            except Exception as bars_err:
+                if hasattr(self, "_show_temp_message"):
+                    self._show_temp_message(f"Bars redraw error: {bars_err}")
 
-        self._redraw_bars_if_needed()
+        # --- Рисуем поверхности ---
+        screen = getattr(self, "screen", None)
+        if screen is not None:
+            try:
+                bars_surface = getattr(self, "bars_surface", None)
+                toolbar_surface = getattr(self, "toolbar_surface", None)
 
-        self.screen.blit(self.bars_surface, (0, 0))
-        self.screen.blit(self.toolbar_surface, (0, 0))
-        self._draw_info_text()
-        self._draw_temp_message()
-        self._draw_sort_progress()
+                if bars_surface is not None:
+                    screen.blit(bars_surface, (0, 0))
+                if toolbar_surface is not None:
+                    screen.blit(toolbar_surface, (0, 0))
+            except Exception as blit_err:
+                if hasattr(self, "_show_temp_message"):
+                    self._show_temp_message(f"Blit error: {blit_err}")
+
+        # --- Текст/оверлеи ---
+        for method_name in ("_draw_info_text", "_draw_temp_message", "_draw_sort_progress"):
+            fn = getattr(self, method_name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception as draw_err:
+                    # не даём одному тексту/оверлею уронить весь кадр
+                    if hasattr(self, "_show_temp_message") and method_name != "_draw_temp_message":
+                        self._show_temp_message(f"{method_name} error: {draw_err}")
 
     def _draw_temp_message(self):
         """Рисует временное сообщение"""
