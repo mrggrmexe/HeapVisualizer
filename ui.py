@@ -59,10 +59,14 @@ class UI:
             self.heap.set_observer(self._on_heap_event)
 
     def _build_buttons(self):
-        """Добавлены новые кнопки для расширенной функциональности"""
+        """Создаёт кнопки тулбара с защитой от ошибок в разметке."""
+
+        # Базовый список кнопок — держим вне try, чтобы можно было
+        # использовать его и в fallback-разметке
         labels = [
             ("Insert Rand", "insert_rand"),
-            (self._toggle_label(), "toggle_mode"),
+            (self._toggle_label() if hasattr(self, "heap") and hasattr(self.heap, "min_heap") else "Toggle",
+             "toggle_mode"),
             ("Pop", "pop"),
             ("PushPop", "pushpop"),
             ("Replace", "replace"),
@@ -72,46 +76,119 @@ class UI:
             ("Reset", "reset"),
         ]
 
-        # Константы для отступов и размеров
+        # На всякий случай убеждаемся, что список кнопок существует
+        if not hasattr(self, "buttons") or not isinstance(self.buttons, list):
+            self.buttons = []
+        else:
+            self.buttons.clear()
+
+        # Значения по умолчанию — пригодятся и в основном коде, и в fallback
         START_X = 20
         START_Y = 12
         PADDING_X = 12
         PADDING_Y = 6
         SPACING = 10
 
-        self.buttons.clear()
+        # Безопасно определяем максимальную ширину строки
+        max_width = None
+        try:
+            if hasattr(self, "toolbar_surface") and self.toolbar_surface is not None:
+                max_width = max(100, int(self.toolbar_surface.get_width()) - 40)
+            elif hasattr(self, "screen") and self.screen is not None:
+                max_width = max(100, int(self.screen.get_width()) - 40)
+        except Exception:
+            pass
 
-        x = START_X
-        y = START_Y
-        max_width = WIDTH - 40
-        current_width = 0
+        # Фолбэк, если ничего не получилось
+        if max_width is None:
+            try:
+                from settings import WIDTH  # может не существовать
+                max_width = max(100, int(WIDTH) - 40)
+            except Exception:
+                max_width = 600  # последний вариант по умолчанию
 
-        # Определяем высоту одной строки кнопок
-        sample_text_w, sample_text_h = self.font.size("Sample")
-        button_height = sample_text_h + PADDING_Y * 2
-        row_height = button_height + 5  # +5 для отступа между строками
+        try:
+            # Шрифт может быть неинициализирован
+            font = getattr(self, "font", None)
+            if font is None:
+                # если по какой-то причине шрифт не создан
+                font = pygame.font.SysFont("consolas", 20)
+                self.font = font
 
-        for i, (label, action) in enumerate(labels):
-            text_w, text_h = self.font.size(label)
-            width = text_w + PADDING_X * 2
-            height = text_h + PADDING_Y * 2
+            # определяем высоту строки
+            sample_text_w, sample_text_h = font.size("Sample")
+            button_height = sample_text_h + PADDING_Y * 2
+            row_height = button_height + 5  # отступ между строками
 
-            # Перенос на новую строку если не помещается
-            if current_width + width > max_width and current_width > 0:
-                y += row_height
-                x = START_X
-                current_width = 0
+            x = START_X
+            y = START_Y
+            current_width = 0
 
-            rect = pygame.Rect(x, y, width, height)
-            self.buttons.append(Button(rect, label, action))
+            for label, action in labels:
+                # Страхуемся от странных значений
+                label_str = str(label)
+                action_str = str(action)
 
-            x += width + SPACING
-            current_width += width + SPACING
+                try:
+                    text_w, text_h = font.size(label_str)
+                except Exception:
+                    # если font.size упал – используем дефолтные размеры
+                    text_w, text_h = 80, sample_text_h
 
-        # Поле ввода располагаем под всеми кнопками с отступом
-        input_y = y + row_height + 10
-        self.input_rect = pygame.Rect(START_X, input_y, 160, 28)
+                width = max(40, text_w + PADDING_X * 2)
+                height = max(button_height, text_h + PADDING_Y * 2)
 
+                # если кнопка слишком широкая – ограничим её
+                if width > max_width:
+                    width = max_width
+
+                # перенос строки
+                if current_width + width > max_width and current_width > 0:
+                    y += row_height
+                    x = START_X
+                    current_width = 0
+
+                rect = pygame.Rect(int(x), int(y), int(width), int(height))
+
+                try:
+                    self.buttons.append(Button(rect, label_str, action_str))
+                except Exception:
+                    # если конструктор Button упал – тихо пропустим эту кнопку
+                    continue
+
+                x += width + SPACING
+                current_width += width + SPACING
+
+            # Если вдруг не создалась ни одна кнопка — делаем простой вертикальный столбец
+            if not self.buttons:
+                y = START_Y
+                default_w, default_h = 120, button_height
+                for i, (label, action) in enumerate(labels):
+                    rect = pygame.Rect(START_X, y + i * (default_h + 4), default_w, default_h)
+                    self.buttons.append(Button(rect, str(label), str(action)))
+
+                y = START_Y + len(labels) * (default_h + 4)
+                row_height = default_h + 4
+
+            # Поле ввода располагаем под последней строкой кнопок
+            input_y = y + row_height + 10
+            self.input_rect = pygame.Rect(START_X, int(input_y), 160, 28)
+
+        except Exception as e:
+            # Грубый fallback, чтобы приложение не упало вообще
+            self.buttons = []
+            y = START_Y
+            default_w, default_h = 120, 32
+            for i, (label, action) in enumerate(labels):
+                rect = pygame.Rect(START_X, y + i * (default_h + 4), default_w, default_h)
+                self.buttons.append(Button(rect, str(label), str(action)))
+
+            self.input_rect = pygame.Rect(START_X, y + len(labels) * (default_h + 8), 160, 28)
+
+            if hasattr(self, "_show_temp_message"):
+                self._show_temp_message(f"Button layout error: {e}")
+
+        # В любом случае просим перерисовать тулбар
         self.toolbar_needs_redraw = True
 
     def _toggle_label(self):
