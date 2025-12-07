@@ -195,38 +195,131 @@ class UI:
         return "To Max-Heap" if self.heap.min_heap else "To Min-Heap"
 
     def handle_event(self, event):
+        # Безопасно достаём список кнопок и текущую кнопку под курсором
+        buttons = getattr(self, "buttons", []) or []
+        hover_btn = getattr(self, "_hover_btn", None)
+
+        # Вспомогательные функции для работы с кнопками разных типов (dict / объект)
+        def _get_btn_rect(btn):
+            if isinstance(btn, dict):
+                return btn.get("rect")
+            return getattr(btn, "rect", None)
+
+        def _get_btn_action(btn):
+            if isinstance(btn, dict):
+                return btn.get("action")
+            return getattr(btn, "action", None)
+
+        def _btn_enabled(btn):
+            is_enabled = getattr(self, "_is_enabled", None)
+            if callable(is_enabled):
+                try:
+                    return bool(is_enabled(btn))
+                except Exception:
+                    return False
+            # если проверки нет — считаем кнопку включённой
+            return True
+
+        # Флаг перерисовки тулбара
+        def _request_redraw():
+            try:
+                self.toolbar_needs_redraw = True
+            except Exception:
+                # если вдруг у self нет такого атрибута
+                setattr(self, "toolbar_needs_redraw", True)
+
         if event.type == pygame.MOUSEMOTION:
             new_hover = None
-            for btn in self.buttons:
-                if btn["rect"].collidepoint(event.pos) and self._is_enabled(btn):
-                    new_hover = btn
-                    break
-            if new_hover is not self._hover_btn:
+            for btn in buttons:
+                rect = _get_btn_rect(btn)
+                if rect is None or not hasattr(rect, "collidepoint"):
+                    continue
+                try:
+                    if rect.collidepoint(event.pos) and _btn_enabled(btn):
+                        new_hover = btn
+                        break
+                except Exception:
+                    # если вдруг event.pos не тот или collidepoint сломался — пропускаем
+                    continue
+
+            if new_hover is not hover_btn:
                 self._hover_btn = new_hover
-                self.toolbar_needs_redraw = True
+                _request_redraw()
 
-        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if self.insert_btn_rect and self.insert_btn_rect.collidepoint(event.pos):
-                if self.input_text:
-                    self._insert_from_input()
-                    self.toolbar_needs_redraw = True
-                return
+        elif event.type == pygame.MOUSEBUTTONDOWN and getattr(event, "button", None) == 1:
+            # Кнопка Insert
+            insert_rect = getattr(self, "insert_btn_rect", None)
+            if insert_rect is not None and hasattr(insert_rect, "collidepoint"):
+                try:
+                    if insert_rect.collidepoint(event.pos):
+                        if getattr(self, "input_text", ""):
+                            if hasattr(self, "_insert_from_input"):
+                                try:
+                                    self._insert_from_input()
+                                except Exception:
+                                    pass
+                            _request_redraw()
+                        return
+                except Exception:
+                    # Не даём обработчику упасть из-за странных координат
+                    pass
 
-            was_active = self.input_active
-            self.input_active = self.input_rect.collidepoint(event.pos)
+            # Поле ввода
+            input_rect = getattr(self, "input_rect", None)
+            was_active = getattr(self, "input_active", False)
+
+            input_clicked = False
+            if input_rect is not None and hasattr(input_rect, "collidepoint"):
+                try:
+                    input_clicked = input_rect.collidepoint(event.pos)
+                except Exception:
+                    input_clicked = False
+
+            self.input_active = bool(input_clicked)
             if self.input_active != was_active:
-                self.toolbar_needs_redraw = True
+                _request_redraw()
 
-            for btn in self.buttons:
-                if btn["rect"].collidepoint(event.pos) and self._is_enabled(btn):
-                    self._run_action(btn["action"])
-                    return
+            # Кнопки тулбара
+            for btn in buttons:
+                rect = _get_btn_rect(btn)
+                if rect is None or not hasattr(rect, "collidepoint"):
+                    continue
+
+                try:
+                    if rect.collidepoint(event.pos) and _btn_enabled(btn):
+                        action = _get_btn_action(btn)
+                        if action is None:
+                            return
+                        # _run_action может быть как методом, так и чем-то ещё
+                        run_action = getattr(self, "_run_action", None)
+                        if callable(run_action):
+                            try:
+                                run_action(action)
+                            except Exception:
+                                # Не валим всё приложение из-за падения внутри обработчика
+                                pass
+                        return
+                except Exception:
+                    # Пропускаем кнопку, если что-то пошло не так
+                    continue
 
         elif event.type == pygame.KEYDOWN:
-            if self.input_active:
-                self._handle_text_input(event)
+            if getattr(self, "input_active", False):
+                # Обработка текста в поле ввода
+                handler = getattr(self, "_handle_text_input", None)
+                if callable(handler):
+                    try:
+                        handler(event)
+                    except Exception:
+                        pass
             else:
-                self._handle_shortcuts(event)
+                # Горячие клавиши
+                handler = getattr(self, "_handle_shortcuts", None)
+                if callable(handler):
+                    try:
+                        handler(event)
+                    except Exception:
+                        pass
 
     def _handle_shortcuts(self, event):
         """Добавлены горячие клавиши для новых функций"""
