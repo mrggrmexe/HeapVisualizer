@@ -354,42 +354,207 @@ class UI:
         self.toolbar_needs_redraw = True
 
     def _run_action(self, action: str):
-        """Добавлена обработка новых действий"""
-        if action == "insert_rand":
-            self.heap.push(random.randint(1, 99))
+        """Безопасно выполняет действие тулбара по строковому идентификатору."""
 
-        elif action == "toggle_mode":
-            if hasattr(self.heap, "toggle_mode"):
-                self.heap.toggle_mode()
+        # Нормализуем действие
+        action = str(action) if action is not None else ""
+        if not action:
+            return
+
+        heap = getattr(self, "heap", None)
+        show_msg = getattr(self, "_show_temp_message", None)
+
+        def warn(msg: str):
+            if callable(show_msg):
+                try:
+                    show_msg(msg)
+                except Exception:
+                    pass
+
+        if heap is None:
+            warn(f"Heap is not initialized (action: {action})")
+            return
+
+        # Удобный способ безопасно проверить длину
+        def safe_len(obj, default=0):
+            try:
+                return len(obj)
+            except Exception:
+                return default
+
+        try:
+            if action == "insert_rand":
+                # heap.push может отсутствовать или быть некорректным
+                push = getattr(heap, "push", None)
+                if callable(push):
+                    try:
+                        import random
+                        push(random.randint(1, 99))
+                    except Exception as e:
+                        warn(f"insert_rand failed: {e}")
+                else:
+                    warn("insert_rand: heap has no 'push' method")
+
+            elif action == "toggle_mode":
+                toggle = getattr(heap, "toggle_mode", None)
+                if callable(toggle):
+                    try:
+                        toggle()
+                    except Exception as e:
+                        warn(f"toggle_mode failed: {e}")
+                else:
+                    # Фолбэк — ручное переключение флага min_heap
+                    if hasattr(heap, "min_heap"):
+                        try:
+                            heap.min_heap = not bool(heap.min_heap)
+                        except Exception as e:
+                            warn(f"toggle_mode: cannot flip min_heap: {e}")
+
+                        heapify = getattr(heap, "heapify", None)
+                        if callable(heapify):
+                            try:
+                                heapify()
+                            except Exception as e:
+                                warn(f"toggle_mode: heapify failed: {e}")
+                    else:
+                        warn("toggle_mode: heap has no 'toggle_mode' and no 'min_heap'")
+
+            elif action == "pop":
+                if safe_len(heap) > 0:
+                    pop_method = getattr(heap, "pop", None)
+                    if callable(pop_method):
+                        try:
+                            pop_method()
+                        except Exception as e:
+                            warn(f"pop failed: {e}")
+                    else:
+                        warn("pop: heap has no 'pop' method")
+                else:
+                    # Тихо игнорируем, можно и сообщить:
+                    # warn("Heap is empty")
+                    pass
+
+            elif action == "pushpop":
+                if getattr(self, "input_text", ""):
+                    handler = getattr(self, "_run_pushpop", None)
+                    if callable(handler):
+                        try:
+                            handler()
+                        except Exception as e:
+                            warn(f"pushpop failed: {e}")
+                    else:
+                        warn("_run_pushpop handler is missing")
+                else:
+                    warn("pushpop: input is empty")
+
+            elif action == "replace":
+                if getattr(self, "input_text", ""):
+                    handler = getattr(self, "_run_replace", None)
+                    if callable(handler):
+                        try:
+                            handler()
+                        except Exception as e:
+                            warn(f"replace failed: {e}")
+                    else:
+                        warn("_run_replace handler is missing")
+                else:
+                    warn("replace: input is empty")
+
+            elif action == "nlargest":
+                handler = getattr(self, "_run_nlargest", None)
+                if callable(handler):
+                    try:
+                        handler()
+                    except Exception as e:
+                        warn(f"nlargest failed: {e}")
+                else:
+                    warn("_run_nlargest handler is missing")
+
+            elif action == "sort_all":
+                handler = getattr(self, "_run_sort_all", None)
+                if callable(handler):
+                    try:
+                        handler()
+                    except Exception as e:
+                        warn(f"sort_all failed: {e}")
+                else:
+                    warn("_run_sort_all handler is missing")
+
+            elif action == "show_stats":
+                handler = getattr(self, "_show_stats", None)
+                if callable(handler):
+                    try:
+                        handler()
+                    except Exception as e:
+                        warn(f"show_stats failed: {e}")
+                else:
+                    warn("_show_stats handler is missing")
+
+            elif action == "reset":
+                # Очищаем кучу
+                cleared = False
+                clear_method = getattr(heap, "clear", None)
+                if callable(clear_method):
+                    try:
+                        clear_method()
+                        cleared = True
+                    except Exception as e:
+                        warn(f"reset: clear() failed: {e}")
+
+                # Фолбэк, если clear() нет
+                if not cleared and hasattr(heap, "data") and isinstance(heap.data, list):
+                    try:
+                        heap.data.clear()
+                        cleared = True
+                    except Exception as e:
+                        warn(f"reset: data.clear() failed: {e}")
+
+                if not cleared:
+                    warn("reset: cannot clear heap")
+
+                # Сброс остальных полей, если они есть
+                try:
+                    if hasattr(self, "destructive_iterating"):
+                        self.destructive_iterating = False
+                except Exception:
+                    pass
+
+                try:
+                    if hasattr(self, "sorted_items"):
+                        # если это список – очищаем, иначе просто перезаписываем
+                        if isinstance(self.sorted_items, list):
+                            self.sorted_items.clear()
+                        else:
+                            self.sorted_items = []
+                except Exception:
+                    pass
+
             else:
-                self.heap.min_heap = not self.heap.min_heap
-                if hasattr(self.heap, "heapify"):
-                    self.heap.heapify()
+                # неизвестное действие
+                warn(f"Unknown action: {action}")
 
-        elif action == "pop" and len(self.heap) > 0:
-            self.heap.pop()
+        except Exception as e:
+            # Грубый «страховочный» catch, чтобы вообще не упасть из-за логики выше
+            warn(f"Action '{action}' failed with unexpected error: {e}")
 
-        elif action == "pushpop" and self.input_text:
-            self._run_pushpop()
-
-        elif action == "replace" and self.input_text:
-            self._run_replace()
-
-        elif action == "nlargest":
-            self._run_nlargest()
-
-        elif action == "sort_all":
-            self._run_sort_all()
-
-        elif action == "show_stats":
-            self._show_stats()
-
-        elif action == "reset":
-            self.heap.clear()
-            self.destructive_iterating = False
-            self.sorted_items = []
-
-        self._build_buttons()
+        # В конце пробуем перестроить кнопки, но тоже безопасно
+        rebuild = getattr(self, "_build_buttons", None)
+        if callable(rebuild):
+            try:
+                rebuild()
+            except Exception as e:
+                warn(f"_build_buttons failed after action '{action}': {e}")
+                # В крайнем случае просто просим перерисовку тулбара
+                try:
+                    self.toolbar_needs_redraw = True
+                except Exception:
+                    setattr(self, "toolbar_needs_redraw", True)
+        else:
+            # Если _build_buttons нет — хотя бы флаг перерисовки
+            try:
+                self.toolbar_needs_redraw = True
+            except Exception:
+                setattr(self, "toolbar_needs_redraw", True)
 
     def _run_pushpop(self):
         """Выполняет pushpop с введенным значением"""
