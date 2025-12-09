@@ -614,20 +614,93 @@ class UI:
             self._show_temp_message(f"Error: {str(e)}")
 
     def _run_sort_all(self):
-        """Запускает/останавливает разрушающую сортировку"""
-        if self.destructive_iterating:
-            self.destructive_iterating = False
-            self._show_temp_message("Sorting stopped")
-        else:
-            if hasattr(self.heap, 'destructive_iter'):
+        """Запускает/останавливает разрушающую сортировку с защитой от ошибок."""
+
+        heap = getattr(self, "heap", None)
+        show_msg = getattr(self, "_show_temp_message", None)
+
+        def notify(msg: str):
+            if callable(show_msg):
+                try:
+                    show_msg(msg)
+                except Exception:
+                    # Сообщение не критично, если не удалось показать
+                    pass
+
+        # Текущее состояние флага (если его нет — считаем False)
+        destructive = bool(getattr(self, "destructive_iterating", False))
+
+        # Если сортировка уже идёт — просто останавливаем
+        if destructive:
+            try:
+                self.destructive_iterating = False
+            except Exception:
+                pass
+            notify("Sorting stopped")
+            return
+
+        # Запуск сортировки
+        if heap is None:
+            notify("Cannot start sorting: heap is not initialized")
+            return
+
+        destructive_iter = getattr(heap, "destructive_iter", None)
+
+        if callable(destructive_iter):
+            # Нормальный режим: есть destructrive_iter
+            try:
                 self.destructive_iterating = True
+            except Exception:
+                # даже если не смогли сохранить флаг — не падаем
+                pass
+
+            # Подготовим контейнер под результаты
+            try:
+                if hasattr(self, "sorted_items"):
+                    if isinstance(self.sorted_items, list):
+                        self.sorted_items.clear()
+                    else:
+                        self.sorted_items = []
+                else:
+                    self.sorted_items = []
+            except Exception:
                 self.sorted_items = []
-                self._show_temp_message("Sorting started - click again to stop")
+
+            notify("Sorting started - click again to stop")
+            return
+
+        # Если destructrive_iter нет — эмуляция через копирование и сортировку
+        # Пытаемся достать элементы через data или итератор
+        items = None
+        try:
+            if hasattr(heap, "data"):
+                items = list(heap.data)
             else:
-                # Эмуляция destructive_iter
-                temp = list(self.heap.data)
-                temp.sort(reverse=not self.heap.min_heap)
-                self._show_temp_message(f"Sorted: {temp}")
+                # как минимум пробуем итерироваться по самому heap
+                items = list(heap)
+        except Exception as e:
+            notify(f"Cannot sort heap: {e}")
+            return
+
+        # Если вообще ничего не получилось
+        if items is None:
+            notify("Cannot sort heap: no accessible data")
+            return
+
+        # Определяем порядок сортировки по флагу min_heap (если есть)
+        reverse = False
+        try:
+            min_heap_flag = getattr(heap, "min_heap", True)
+            reverse = not bool(min_heap_flag)
+        except Exception:
+            # по умолчанию сортируем по возрастанию
+            reverse = False
+
+        try:
+            items.sort(reverse=reverse)
+            notify(f"Sorted: {items}")
+        except Exception as e:
+            notify(f"Sorting failed: {e}")
 
     def _show_stats(self):
         """Показывает статистику кучи"""
